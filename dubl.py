@@ -53,6 +53,12 @@ HTML_TEMPLATE = """
         .panel-box { background: #252525; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #333; text-align: right; }
         .panel-title { font-weight: bold; margin-bottom: 12px; color: #ffca28; font-size: 15px; display: flex; align-items: center; gap: 8px; }
 
+        .volume-control-group { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; background: #2a2a2a; padding: 12px; border-radius: 6px; border: 1px solid #333; }
+        .volume-row { display: flex; align-items: center; gap: 10px; }
+        .volume-row label { width: 130px; margin-bottom: 0; font-weight: bold; font-size: 13px; }
+        .volume-row input[type="range"] { flex: 1; height: 6px; border-radius: 3px; cursor: pointer; }
+        .volume-row span { width: 45px; text-align: left; font-size: 13px; font-weight: bold; color: #ffca28; }
+
         .switch-container { display: flex; align-items: center; justify-content: space-between; background: #2a2a2a; padding: 10px 15px; border-radius: 6px; margin-top: 10px; border: 1px solid #333; }
         .switch { position: relative; display: inline-block; width: 46px; height: 24px; }
         .switch input { opacity: 0; width: 0; height: 0; }
@@ -68,7 +74,6 @@ HTML_TEMPLATE = """
         .video-wrapper { position: relative; width: 100%; margin-top: 15px; }
         video { width: 100%; max-height: 440px; border-radius: 8px; background: #000; touch-action: manipulation; }
         
-        /* نمایش زیرنویس ترجمه‌شده روی ویدیو */
         .subtitle-overlay {
             position: absolute;
             bottom: 65px;
@@ -122,7 +127,6 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <!-- پنل تنظیمات مستقل متن و صدا -->
         <div class="panel-box">
             <div class="panel-title">⚙️ تنظیمات زبان متن زیرنویس و صدای دوبله</div>
             
@@ -150,6 +154,20 @@ HTML_TEMPLATE = """
                         <option value="tr">ترکی (Turkish)</option>
                         <option value="none">بدون صدا (فقط زیرنویس)</option>
                     </select>
+                </div>
+            </div>
+
+            <!-- بخش کنترل مجزای صدای اصلی ویدیو و صدای دوبله -->
+            <div class="volume-control-group">
+                <div class="volume-row">
+                    <label>🎬 صدای ویدیو اصلی:</label>
+                    <input type="range" id="videoVolSlider" min="0" max="1" step="0.05" value="0.2">
+                    <span id="videoVolVal">20%</span>
+                </div>
+                <div class="volume-row">
+                    <label>🎙️ صدای دوبله:</label>
+                    <input type="range" id="dubVolSlider" min="0" max="1" step="0.05" value="1.0">
+                    <span id="dubVolVal">100%</span>
                 </div>
             </div>
 
@@ -186,9 +204,32 @@ HTML_TEMPLATE = """
         const processBtn = document.getElementById('processBtn');
         const speedBadge = document.getElementById('speedBadge');
         const subOverlay = document.getElementById('subOverlay');
+
+        const videoVolSlider = document.getElementById('videoVolSlider');
+        const videoVolVal = document.getElementById('videoVolVal');
+        const dubVolSlider = document.getElementById('dubVolSlider');
+        const dubVolVal = document.getElementById('dubVolVal');
         
         let dubbingMap = {};
         let currentRate = 1.0;
+
+        // مقداردهی اولیه حجم صداها
+        video.volume = parseFloat(videoVolSlider.value);
+        audioPlayer.volume = parseFloat(dubVolSlider.value);
+
+        // مدیریت تغییر صدای ویدیو اصلی
+        videoVolSlider.addEventListener('input', function() {
+            const val = parseFloat(this.value);
+            video.volume = val;
+            videoVolVal.innerText = Math.round(val * 100) + '%';
+        });
+
+        // مدیریت تغییر صدای دوبله
+        dubVolSlider.addEventListener('input', function() {
+            const val = parseFloat(this.value);
+            audioPlayer.volume = val;
+            dubVolVal.innerText = Math.round(val * 100) + '%';
+        });
 
         function appendLog(text) {
             logDiv.innerHTML += text + "<br>";
@@ -199,6 +240,7 @@ HTML_TEMPLATE = """
             const file = event.target.files[0];
             if (file) {
                 video.src = URL.createObjectURL(file);
+                video.volume = parseFloat(videoVolSlider.value);
                 statusDiv.innerText = "ویدیو بارگذاری شد. حالا زیرنویس را انتخاب کنید.";
             }
         }
@@ -243,6 +285,7 @@ HTML_TEMPLATE = """
                         if (item.audio_url) {
                             audioPlayer.src = item.audio_url;
                             audioPlayer.currentTime = 0;
+                            audioPlayer.volume = parseFloat(dubVolSlider.value);
                             audioPlayer.playbackRate = currentRate;
                             audioPlayer.play().catch(() => {});
                         }
