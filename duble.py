@@ -2,9 +2,11 @@ import asyncio
 import os
 import sys
 import signal
+import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 import edge_tts
-from flask import Flask, render_template, request, send_from_directory
+from flask import Flask, render_template, request, send_from_directory, jsonify
 from flask_socketio import SocketIO, emit
 import pysrt
 from deep_translator import GoogleTranslator
@@ -38,23 +40,36 @@ VOICE_MAPPING = {
     "zh": {"female": "zh-CN-XiaoxiaoNeural", "male": "zh-CN-YunjianNeural"}
 }
 
+# عبارت‌های متداول ارورهای گوگل ترنسلیت
+TRANSLATE_ERROR_KEYWORDS = [
+    "error 500", "try again later", "too many requests", 
+    "429", "403 forbidden", "service unavailable"
+]
+
 def translate_single_text(text, target_lang):
     text_cleaned = text.strip() if text else ""
     if not target_lang or target_lang == "none" or not text_cleaned:
         return text
     try:
+        time.sleep(0.15)  # تاخیر کوتاه برای جلوگیری از Rate Limit
         res = GoogleTranslator(source='auto', target=target_lang).translate(text_cleaned)
-        return res if res else text
+        
+        # اگر خروجی گوگل حاوی متن خطا بود، متن اصلی جایگزین شود تا خوانده نشود
+        if res and any(kw in res.lower() for kw in TRANSLATE_ERROR_KEYWORDS):
+            print(f"[!] عدم ترجمه (بلاک موقت گوگل). استفاده از متن اصلی برای: '{text_cleaned[:20]}...'")
+            return text_cleaned
+            
+        return res if res else text_cleaned
     except Exception as e:
-        print(f"[!] خطای ترجمه یک خط: {e}")
-        return text
+        print(f"[!] خطای شبکه در ترجمه: {e}")
+        return text_cleaned
 
 def translate_batch(text_list, target_lang):
     if not target_lang or target_lang == "none" or not text_list:
         return text_list
 
-    print(f"[+] در حال ترجمه موازی {len(text_list)} خط زیرنویس...")
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    print(f"[+] در حال ترجمه کنترل‌شده {len(text_list)} خط زیرنویس...")
+    with ThreadPoolExecutor(max_workers=2) as executor:
         translated_results = list(executor.map(lambda t: translate_single_text(t, target_lang), text_list))
         
     return translated_results
@@ -125,78 +140,94 @@ def serve_audio(filename):
 
 @app.route('/process', methods=['POST'])
 def process_srt():
-    srt_data = request.form.get('srt_data')
-    gender = request.form.get('gender')
-    text_lang = request.form.get('text_lang')
-    audio_lang = request.form.get('audio_lang')
+    try:
+        srt_data = request.form.get('srt_data')
+        gender = request.form.get('gender', 'male')
+        text_lang = request.form.get('text_lang', 'fa')
+        audio_lang = request.form.get('audio_lang', 'ro')
 
-    def run_background_process():
-        for f in os.listdir(STATIC_AUDIO_DIR):
+        if not srt_data:
+            return jsonify({"status": "error", "message": "اطلاعات زیرنویس دریافت نشد"}), 400
+
+        def run_background_process():
             try:
-                os.remove(os.path.join(STATIC_AUDIO_DIR, f))
-            except Exception:
-                pass
+                for f in os.listdir(STATIC_AUDIO_DIR):
+                    try:
+                        os.remove(os.path.join(STATIC_AUDIO_DIR, f))
+                    except Exception:
+                        pass
 
-        subs = pysrt.from_string(srt_data)
-        raw_sub_data = []
-        orig_texts = []
-
-        for i, sub in enumerate(subs):
-            text = sub.text_without_tags.strip()
-            if not text:
-                continue
-            start_ms = (sub.start.hours * 3600 + sub.start.minutes * 60 + sub.start.seconds) * 1000 + sub.start.milliseconds
-            end_ms = (sub.end.hours * 3600 + sub.end.minutes * 60 + sub.end.seconds) * 1000 + sub.end.milliseconds
-            
-            raw_sub_data.append((i, text, start_ms, end_ms))
-            orig_texts.append(text)
-
-        try:
-            socketio.emit('status_update', {'msg': f'در حال ترجمه یکجای {len(orig_texts)} خط زیرنویس...'})
-        except Exception:
-            pass
-
-        display_texts = translate_batch(orig_texts, text_lang)
-        if audio_lang == text_lang:
-            audio_texts = display_texts
-        else:
-            audio_texts = translate_batch(orig_texts, audio_lang)
-
-        sub_tasks = []
-        for idx, (i, orig_text, start_ms, end_ms) in enumerate(raw_sub_data):
-            d_text = display_texts[idx] if idx < len(display_texts) else orig_text
-            a_text = audio_texts[idx] if idx < len(audio_texts) else orig_text
-            sub_tasks.append((i, d_text, a_text, start_ms, end_ms))
-
-        try:
-            socketio.emit('status_update', {'msg': 'ترجمه انجام شد. در حال ساخت صداهای دوبله...'})
-        except Exception:
-            pass
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [
-                executor.submit(process_single_sub, task, gender, audio_lang)
-                for task in sub_tasks
-            ]
-            for future in futures:
-                if sys.is_finalizing():
-                    break
                 try:
-                    res = future.result()
-                    if res is None:
-                        break
-                except Exception:
-                    break
+                    subs = pysrt.from_string(srt_data)
+                except Exception as srt_err:
+                    print(f"[!] خطای ساختار زیرنویس: {srt_err}")
+                    socketio.emit('status_update', {'msg': '❌ فرمت فایل زیرنویس نامعتبر است.'})
+                    return
 
-        try:
-            socketio.emit('processing_finished', {})
-        except Exception:
-            pass
+                raw_sub_data = []
+                orig_texts = []
 
-    import threading
-    t = threading.Thread(target=run_background_process, daemon=True)
-    t.start()
-    return {"status": "ok"}
+                for i, sub in enumerate(subs):
+                    text = sub.text_without_tags.strip()
+                    if not text:
+                        continue
+                    start_ms = (sub.start.hours * 3600 + sub.start.minutes * 60 + sub.start.seconds) * 1000 + sub.start.milliseconds
+                    end_ms = (sub.end.hours * 3600 + sub.end.minutes * 60 + sub.end.seconds) * 1000 + sub.end.milliseconds
+                    
+                    raw_sub_data.append((i, text, start_ms, end_ms))
+                    orig_texts.append(text)
+
+                if not orig_texts:
+                    socketio.emit('status_update', {'msg': '❌ محتوای متنی در زیرنویس یافت نشد.'})
+                    return
+
+                socketio.emit('status_update', {'msg': f'در حال ترجمه یکجای {len(orig_texts)} خط زیرنویس...'})
+
+                display_texts = translate_batch(orig_texts, text_lang)
+                if audio_lang == text_lang:
+                    audio_texts = display_texts
+                else:
+                    audio_texts = translate_batch(orig_texts, audio_lang)
+
+                sub_tasks = []
+                for idx, (i, orig_text, start_ms, end_ms) in enumerate(raw_sub_data):
+                    d_text = display_texts[idx] if idx < len(display_texts) else orig_text
+                    a_text = audio_texts[idx] if idx < len(audio_texts) else orig_text
+                    sub_tasks.append((i, d_text, a_text, start_ms, end_ms))
+
+                socketio.emit('status_update', {'msg': 'ترجمه انجام شد. در حال ساخت صداهای دوبله...'})
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(process_single_sub, task, gender, audio_lang)
+                        for task in sub_tasks
+                    ]
+                    for future in futures:
+                        if sys.is_finalizing():
+                            break
+                        try:
+                            res = future.result()
+                            if res is None:
+                                break
+                        except Exception as e:
+                            print(f"[!] خطای اجرای ترد: {e}")
+                            break
+
+                socketio.emit('processing_finished', {})
+
+            except Exception as bg_err:
+                print(f"[!] خطای پس‌زمینه:")
+                traceback.print_exc()
+
+        import threading
+        t = threading.Thread(target=run_background_process, daemon=True)
+        t.start()
+        return jsonify({"status": "ok"})
+
+    except Exception as e:
+        print(f"[!] خطای شدید در /process:")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)
