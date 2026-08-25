@@ -180,7 +180,7 @@
         
         <div class="video-wrapper" id="videoContainer">
             <div id="subOverlay" class="subtitle-overlay"></div>
-            <video id="mainVideo" controls></video>
+            <video id="mainVideo" controls playsinline webkit-playsinline></video>
         </div>
 
         <button class="fullscreen-btn" onclick="toggleCustomFullscreen()">📺 حالت تمام‌صفحه با زیرنویس (Fullscreen)</button>
@@ -217,26 +217,75 @@
         video.volume = parseFloat(videoVolSlider.value);
         audioPlayer.volume = parseFloat(dubVolSlider.value);
 
-        function toggleCustomFullscreen() {
-            const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement;
-            if (!isFullscreen) {
-                if (videoContainer.requestFullscreen) {
-                    videoContainer.requestFullscreen();
-                } else if (videoContainer.webkitRequestFullscreen) {
-                    videoContainer.webkitRequestFullscreen();
-                } else if (videoContainer.msRequestFullscreen) {
-                    videoContainer.msRequestFullscreen();
+      async function toggleCustomFullscreen() {
+            const isFullscreen =
+                document.fullscreenElement ||
+                document.webkitFullscreenElement ||
+                document.mozFullScreenElement ||
+                document.msFullscreenElement;
+
+            try {
+                if (!isFullscreen) {
+
+                    // فقط خود videoContainer وارد Fullscreen شود
+                    if (videoContainer.requestFullscreen) {
+                        await videoContainer.requestFullscreen();
+                    } 
+                    else if (videoContainer.webkitRequestFullscreen) {
+                        videoContainer.webkitRequestFullscreen();
+                    } 
+                    else if (videoContainer.mozRequestFullScreen) {
+                        videoContainer.mozRequestFullScreen();
+                    } 
+                    else if (videoContainer.msRequestFullscreen) {
+                        videoContainer.msRequestFullscreen();
+                    }
+
+                } else {
+
+                    // خروج از Fullscreen
+                    if (document.exitFullscreen) {
+                        await document.exitFullscreen();
+                    } 
+                    else if (document.webkitExitFullscreen) {
+                        document.webkitExitFullscreen();
+                    } 
+                    else if (document.mozCancelFullScreen) {
+                        document.mozCancelFullScreen();
+                    } 
+                    else if (document.msExitFullscreen) {
+                        document.msExitFullscreen();
+                    }
                 }
-            } else {
-                if (document.exitFullscreen) {
-                    document.exitFullscreen();
-                } else if (document.webkitExitFullscreen) {
-                    document.webkitExitFullscreen();
-                } else if (document.mozCancelFullScreen) {
-                    document.mozCancelFullScreen();
-                }
+
+            } catch (error) {
+                console.log("Fullscreen error:", error);
             }
         }
+
+        // هماهنگ کردن وضعیت صفحه بعد از خروج از Fullscreen
+        function handleFullscreenChange() {
+            const isFullscreen =
+                document.fullscreenElement ||
+                document.webkitFullscreenElement ||
+                document.mozFullScreenElement ||
+                document.msFullscreenElement;
+
+            if (!isFullscreen) {
+                // مطمئن می‌شویم پلیر به حالت عادی برگردد
+                videoContainer.style.width = "";
+                videoContainer.style.height = "";
+                videoContainer.style.position = "";
+                videoContainer.style.top = "";
+                videoContainer.style.left = "";
+            }
+        }
+
+        // پشتیبانی از مرورگرهای مختلف و تبلت
+        document.addEventListener("fullscreenchange", handleFullscreenChange);
+        document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+        document.addEventListener("mozfullscreenchange", handleFullscreenChange);
+        document.addEventListener("MSFullscreenChange", handleFullscreenChange);
 
         videoVolSlider.addEventListener('input', function() {
             video.volume = parseFloat(this.value);

@@ -13,9 +13,7 @@ source.include_exts = py,html,css,js,png,jpg,ttf,srt
 version = 0.1
 
 # کتابخانه‌های پایتون مورد نیاز
-requirements = python3,kivy,flask,flask-socketio,pysrt,deep-translator,edge-tts,pyjnius
-
-
+requirements = python3==3.11,kivy,flask,flask-socketio,pysrt,deep-translator,edge-tts,pyjnius
 # جهت صفحه
 orientation = portrait
 
