@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import signal
+import re
 from concurrent.futures import ThreadPoolExecutor
 import edge_tts
 from flask import Flask, render_template, request, send_from_directory
@@ -20,7 +21,6 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = "independent_sub_audio_secret"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-# تنظیم مسیر ذخیره‌سازی فایل‌های صوتی سازگار با اندروید
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_AUDIO_DIR = os.path.join(BASE_DIR, "static", "dub_audio")
 os.makedirs(STATIC_AUDIO_DIR, exist_ok=True)
@@ -40,13 +40,12 @@ VOICE_MAPPING = {
 }
 
 def translate_batch(text_list, target_lang):
-    """ترجمه یکجای متن‌ها در دسته‌های ۳۰ تایی برای جلوگیری از ارور ۵۰۰"""
     if not target_lang or target_lang == "none" or not text_list:
         return text_list
 
     translated_results = []
-    chunk_size = 30
-    delimiter = "\n<<<>>>\n"
+    chunk_size = 20
+    delimiter = " ||| "
 
     for i in range(0, len(text_list), chunk_size):
         chunk = text_list[i:i + chunk_size]
@@ -54,14 +53,16 @@ def translate_batch(text_list, target_lang):
 
         try:
             translated_combined = GoogleTranslator(source='auto', target=target_lang).translate(combined_text)
-            translated_chunk = [t.strip() for t in translated_combined.split("<<<>>>")]
+            # استفاده از Regex برای جدا کردن خطوط حتی در صورت فاصله انداختن گوگل
+            translated_chunk = re.split(r'\s*\|\|\|\s*', translated_combined)
 
             if len(translated_chunk) == len(chunk):
-                translated_results.extend(translated_chunk)
+                translated_results.extend([t.strip() for t in translated_chunk])
             else:
+                print(f"[!] عدم تطابق خطوط ترجمه (درخواست: {len(chunk)}، دریافت: {len(translated_chunk)})")
                 translated_results.extend(chunk)
         except Exception as e:
-            print(f"[-] خطای ترجمه دسته: {e}")
+            print(f"[!] خطای ترجمه گوگل: {e}")
             translated_results.extend(chunk)
 
     return translated_results
@@ -91,8 +92,9 @@ def process_single_sub(sub_info, gender, audio_lang):
                 loop.run_until_complete(make_tts())
                 loop.close()
                 audio_url = f"/static/dub_audio/{audio_filename}"
+                print(f"[+] فایل ساخته شد: {audio_filename}")
         except Exception as e:
-            print(f"[-] خطای تولید صدا (edge-tts): {e}")
+            print(f"[!] خطای ساخت صدا در edge-tts (زیرنویس {i}): {e}")
 
     item = {
         "id": i,
@@ -105,8 +107,8 @@ def process_single_sub(sub_info, gender, audio_lang):
     
     try:
         socketio.emit('chunk_ready', item)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[!] خطای ارسال به سوکت: {e}")
         
     return item
 
@@ -168,7 +170,7 @@ def process_srt():
         except Exception:
             pass
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [
                 executor.submit(process_single_sub, task, gender, audio_lang)
                 for task in sub_tasks
