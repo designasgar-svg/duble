@@ -81,20 +81,30 @@ def process_single_sub(sub_info, gender, audio_lang):
         audio_filename = f"audio_{start_ms}.mp3"
         audio_out_path = os.path.join(STATIC_AUDIO_DIR, audio_filename)
 
-        async def make_tts():
-            communicate = edge_tts.Communicate(audio_text, voice)
-            await communicate.save(audio_out_path)
+        # تابع ساخت صدا با تلاش مجدد (Retry)
+        async def make_tts_with_retry():
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    communicate = edge_tts.Communicate(audio_text, voice)
+                    await communicate.save(audio_out_path)
+                    return True
+                except Exception as err:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(1) # ۱ ثانیه صبر قبل از تلاش مجدد
+                    else:
+                        raise err
 
         try:
             if not sys.is_finalizing():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(make_tts())
+                loop.run_until_complete(make_tts_with_retry())
                 loop.close()
                 audio_url = f"/static/dub_audio/{audio_filename}"
                 print(f"[+] فایل ساخته شد: {audio_filename}")
         except Exception as e:
-            print(f"[!] خطای ساخت صدا در edge-tts (زیرنویس {i}): {e}")
+            print(f"[!] خطای ساخت صدا در زیرنویس {i}: {type(e).__name__} - {e}")
 
     item = {
         "id": i,
@@ -111,7 +121,6 @@ def process_single_sub(sub_info, gender, audio_lang):
         print(f"[!] خطای ارسال به سوکت: {e}")
         
     return item
-
 @app.route('/')
 def index():
     return render_template('index.html')
