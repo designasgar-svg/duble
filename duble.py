@@ -2,7 +2,6 @@ import asyncio
 import os
 import sys
 import signal
-import re
 from concurrent.futures import ThreadPoolExecutor
 import edge_tts
 from flask import Flask, render_template, request, send_from_directory
@@ -39,32 +38,25 @@ VOICE_MAPPING = {
     "zh": {"female": "zh-CN-XiaoxiaoNeural", "male": "zh-CN-YunjianNeural"}
 }
 
+def translate_single_text(text, target_lang):
+    text_cleaned = text.strip() if text else ""
+    if not target_lang or target_lang == "none" or not text_cleaned:
+        return text
+    try:
+        res = GoogleTranslator(source='auto', target=target_lang).translate(text_cleaned)
+        return res if res else text
+    except Exception as e:
+        print(f"[!] خطای ترجمه یک خط: {e}")
+        return text
+
 def translate_batch(text_list, target_lang):
     if not target_lang or target_lang == "none" or not text_list:
         return text_list
 
-    translated_results = []
-    chunk_size = 20
-    delimiter = " ||| "
-
-    for i in range(0, len(text_list), chunk_size):
-        chunk = text_list[i:i + chunk_size]
-        combined_text = delimiter.join(chunk)
-
-        try:
-            translated_combined = GoogleTranslator(source='auto', target=target_lang).translate(combined_text)
-            # استفاده از Regex برای جدا کردن خطوط حتی در صورت فاصله انداختن گوگل
-            translated_chunk = re.split(r'\s*\|\|\|\s*', translated_combined)
-
-            if len(translated_chunk) == len(chunk):
-                translated_results.extend([t.strip() for t in translated_chunk])
-            else:
-                print(f"[!] عدم تطابق خطوط ترجمه (درخواست: {len(chunk)}، دریافت: {len(translated_chunk)})")
-                translated_results.extend(chunk)
-        except Exception as e:
-            print(f"[!] خطای ترجمه گوگل: {e}")
-            translated_results.extend(chunk)
-
+    print(f"[+] در حال ترجمه موازی {len(text_list)} خط زیرنویس...")
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        translated_results = list(executor.map(lambda t: translate_single_text(t, target_lang), text_list))
+        
     return translated_results
 
 def process_single_sub(sub_info, gender, audio_lang):
@@ -74,24 +66,25 @@ def process_single_sub(sub_info, gender, audio_lang):
     i, display_text, audio_text, start_ms, end_ms = sub_info
     audio_url = None
 
-    if audio_lang and audio_lang != "none":
+    clean_audio_text = audio_text.strip() if audio_text else ""
+
+    if audio_lang and audio_lang != "none" and clean_audio_text:
         voices = VOICE_MAPPING.get(audio_lang, VOICE_MAPPING["en"])
         voice = voices["female"] if gender == "female" else voices["male"]
 
         audio_filename = f"audio_{start_ms}.mp3"
         audio_out_path = os.path.join(STATIC_AUDIO_DIR, audio_filename)
 
-        # تابع ساخت صدا با تلاش مجدد (Retry)
         async def make_tts_with_retry():
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    communicate = edge_tts.Communicate(audio_text, voice)
+                    communicate = edge_tts.Communicate(clean_audio_text, voice)
                     await communicate.save(audio_out_path)
                     return True
                 except Exception as err:
                     if attempt < max_retries - 1:
-                        await asyncio.sleep(1) # ۱ ثانیه صبر قبل از تلاش مجدد
+                        await asyncio.sleep(1)
                     else:
                         raise err
 
@@ -121,6 +114,7 @@ def process_single_sub(sub_info, gender, audio_lang):
         print(f"[!] خطای ارسال به سوکت: {e}")
         
     return item
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -179,7 +173,7 @@ def process_srt():
         except Exception:
             pass
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             futures = [
                 executor.submit(process_single_sub, task, gender, audio_lang)
                 for task in sub_tasks
