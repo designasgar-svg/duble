@@ -39,46 +39,6 @@
         
         .video-wrapper { position: relative; width: 100%; margin-top: 15px; background: #000; border-radius: 8px; overflow: hidden; }
         video { width: 100%; max-height: 440px; display: block; }
-
-        /* دکمه‌های شناور کنترل تمام صفحه */
-        .fs-controls-overlay {
-            position: absolute;
-            top: 15px;
-            right: 15px;
-            display: flex;
-            gap: 10px;
-            z-index: 2147483647;
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.3s ease, visibility 0.3s ease;
-            pointer-events: auto;
-        }
-
-        .fs-controls-overlay.active {
-            opacity: 1;
-            visibility: visible;
-        }
-
-        .fs-btn {
-            background: rgba(0, 0, 0, 0.75);
-            color: #fff;
-            border: 1px solid #ffca28;
-            padding: 8px 14px;
-            border-radius: 20px;
-            font-size: 13px;
-            font-weight: bold;
-            cursor: pointer;
-            backdrop-filter: blur(4px);
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-
-        .fs-btn-lock.locked {
-            background: rgba(211, 47, 47, 0.9);
-            border-color: #ff5252;
-            color: #fff;
-        }
         
         .subtitle-overlay {
             position: absolute;
@@ -96,7 +56,7 @@
             pointer-events: none;
             display: none;
             line-height: 1.4;
-            z-index: 2147483646;
+            z-index: 2147483647;
         }
 
         .video-wrapper:-webkit-full-screen,
@@ -122,7 +82,7 @@
         .video-wrapper:-webkit-full-screen .subtitle-overlay {
             bottom: 80px;
             font-size: 34px;
-            z-index: 2147483646;
+            z-index: 2147483647;
         }
 
         #status { color: #17a2b8; margin: 12px 0; font-weight: bold; font-size: 15px; min-height: 22px; }
@@ -219,10 +179,6 @@
         <div id="status">ویدیو و زیرنویس را انتخاب کنید.</div>
         
         <div class="video-wrapper" id="videoContainer">
-            <div id="fsControls" class="fs-controls-overlay">
-                <button id="lockBtn" class="fs-btn fs-btn-lock" onclick="toggleScreenLock(event)">🔓 قفل لمس</button>
-                <button id="exitFsBtn" class="fs-btn" onclick="exitFullscreenHandler(event)">✖ خروج از تمام‌صفحه</button>
-            </div>
             <div id="subOverlay" class="subtitle-overlay"></div>
             <video id="mainVideo" controls playsinline webkit-playsinline></video>
         </div>
@@ -244,10 +200,6 @@
         const processBtn = document.getElementById('processBtn');
         const subOverlay = document.getElementById('subOverlay');
 
-        const fsControls = document.getElementById('fsControls');
-        const lockBtn = document.getElementById('lockBtn');
-        const exitFsBtn = document.getElementById('exitFsBtn');
-
         const videoVolSlider = document.getElementById('videoVolSlider');
         const videoVolVal = document.getElementById('videoVolVal');
         const dubVolSlider = document.getElementById('dubVolSlider');
@@ -257,62 +209,15 @@
         let dubbingMap = {};
         let syncOffsetMs = 0;
 
-        // متغیرهای کنترلی جدید
+        // متغیرهای کنترلی جدید پلیر
         let holdTimer = null;
         let isHolding = false;
         let lastTapTime = 0;
-        let isScreenLocked = false;
-        let fsControlsTimeout = null;
 
         video.volume = parseFloat(videoVolSlider.value);
         audioPlayer.volume = parseFloat(dubVolSlider.value);
 
-        // --- مدیریت نمایش کنترل‌های فوقانی ---
-        function showFsControls() {
-            fsControls.classList.add('active');
-            clearTimeout(fsControlsTimeout);
-            fsControlsTimeout = setTimeout(() => {
-                fsControls.classList.remove('active');
-            }, 3000);
-        }
-
-        videoContainer.addEventListener('click', (e) => {
-            if (e.target.closest('.fs-controls-overlay')) return;
-            showFsControls();
-        });
-
-        videoContainer.addEventListener('touchstart', (e) => {
-            if (e.target.closest('.fs-controls-overlay')) return;
-            showFsControls();
-        });
-
-        // --- قفل لمس صفحه ---
-        function toggleScreenLock(e) {
-            if (e) e.stopPropagation();
-            isScreenLocked = !isScreenLocked;
-
-            if (isScreenLocked) {
-                lockBtn.innerHTML = "🔒 باز کردن قفل";
-                lockBtn.classList.add("locked");
-                exitFsBtn.style.display = "none";
-                video.controls = false;
-                appendLog("🔒 لمس صفحه قفل شد.");
-            } else {
-                lockBtn.innerHTML = "🔓 قفل لمس";
-                lockBtn.classList.remove("locked");
-                exitFsBtn.style.display = "flex";
-                video.controls = true;
-                appendLog("🔓 قفل لمس باز شد.");
-            }
-            showFsControls();
-        }
-
-        function exitFullscreenHandler(e) {
-            if (e) e.stopPropagation();
-            toggleCustomFullscreen();
-        }
-
-        async function toggleCustomFullscreen() {
+      async function toggleCustomFullscreen() {
             const isFullscreen =
                 document.fullscreenElement ||
                 document.webkitFullscreenElement ||
@@ -321,31 +226,44 @@
 
             try {
                 if (!isFullscreen) {
+
+                    // فقط خود videoContainer وارد Fullscreen شود
                     if (videoContainer.requestFullscreen) {
                         await videoContainer.requestFullscreen();
-                    } else if (videoContainer.webkitRequestFullscreen) {
+                    } 
+                    else if (videoContainer.webkitRequestFullscreen) {
                         videoContainer.webkitRequestFullscreen();
-                    } else if (videoContainer.mozRequestFullScreen) {
+                    } 
+                    else if (videoContainer.mozRequestFullScreen) {
                         videoContainer.mozRequestFullScreen();
-                    } else if (videoContainer.msRequestFullscreen) {
+                    } 
+                    else if (videoContainer.msRequestFullscreen) {
                         videoContainer.msRequestFullscreen();
                     }
+
                 } else {
+
+                    // خروج از Fullscreen
                     if (document.exitFullscreen) {
                         await document.exitFullscreen();
-                    } else if (document.webkitExitFullscreen) {
+                    } 
+                    else if (document.webkitExitFullscreen) {
                         document.webkitExitFullscreen();
-                    } else if (document.mozCancelFullScreen) {
+                    } 
+                    else if (document.mozCancelFullScreen) {
                         document.mozCancelFullScreen();
-                    } else if (document.msExitFullscreen) {
+                    } 
+                    else if (document.msExitFullscreen) {
                         document.msExitFullscreen();
                     }
                 }
+
             } catch (error) {
                 console.log("Fullscreen error:", error);
             }
         }
 
+        // هماهنگ کردن وضعیت صفحه بعد از خروج از Fullscreen
         function handleFullscreenChange() {
             const isFullscreen =
                 document.fullscreenElement ||
@@ -354,21 +272,16 @@
                 document.msFullscreenElement;
 
             if (!isFullscreen) {
+                // مطمئن می‌شویم پلیر به حالت عادی برگردد
                 videoContainer.style.width = "";
                 videoContainer.style.height = "";
                 videoContainer.style.position = "";
                 videoContainer.style.top = "";
                 videoContainer.style.left = "";
-                
-                if (isScreenLocked) {
-                    toggleScreenLock();
-                }
-                fsControls.classList.remove('active');
-            } else {
-                showFsControls();
             }
         }
 
+        // پشتیبانی از مرورگرهای مختلف و تبلت
         document.addEventListener("fullscreenchange", handleFullscreenChange);
         document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
         document.addEventListener("mozfullscreenchange", handleFullscreenChange);
@@ -454,9 +367,11 @@
                             audioPlayer.currentTime = 0;
                             audioPlayer.volume = parseFloat(dubVolSlider.value);
                             
+                            // --- منطق جدید: تنظیم هوشمند سرعت صوتی بر اساس خط بعدی ---
                             audioPlayer.onloadedmetadata = function() {
-                                let targetRate = video.playbackRate;
+                                let targetRate = video.playbackRate; // سرعت پایه ویدیو
 
+                                // پیدا کردن خط بعدی که فایل صوتی دارد
                                 let nextItem = null;
                                 for (let j = i + 1; j < keys.length; j++) {
                                     if (dubbingMap[keys[j]] && dubbingMap[keys[j]].audio_url) {
@@ -466,12 +381,15 @@
                                 }
 
                                 if (nextItem) {
+                                    // زمان باقی‌مانده تا شروع خط بعدی (به ثانیه)
                                     let timeUntilNextMs = (nextItem.start_ms - item.start_ms);
                                     let availableTimeSec = (timeUntilNextMs / 1000) / video.playbackRate;
                                     let audioDuration = audioPlayer.duration;
 
+                                    // اگر طول صدا از زمان در دسترس بیشتر بود، سرعت بیشتر می‌شود
                                     if (audioDuration > availableTimeSec && availableTimeSec > 0.5) {
                                         targetRate = (audioDuration / availableTimeSec) * video.playbackRate;
+                                        // محدود کردن حداکثر سرعت تا 2.5X جهت نامفهوم نشدن صدا
                                         targetRate = Math.min(targetRate, 2.5);
                                     }
                                 }
@@ -527,11 +445,10 @@
         }
 
         // ==========================================
-        // --- کنترل‌های ژست حرکتی پلیر (با پشتیبانی از قفل صفحه) ---
+        // --- کنترل‌های ژست حرکتی پلیر (سرعت دوبل / عقب و جلو) ---
         // ==========================================
 
         function startFastForward() {
-            if (isScreenLocked) return;
             holdTimer = setTimeout(() => {
                 isHolding = true;
                 video.playbackRate = 2.0;
@@ -541,7 +458,6 @@
         }
 
         function stopFastForward() {
-            if (isScreenLocked) return;
             clearTimeout(holdTimer);
             if (isHolding) {
                 isHolding = false;
@@ -551,14 +467,15 @@
             }
         }
 
+        // رویدادهای لمس و کلیک برای سرعت ۲X
         video.addEventListener('mousedown', (e) => { if (e.button === 0) startFastForward(); });
         video.addEventListener('mouseup', stopFastForward);
         video.addEventListener('mouseleave', stopFastForward);
         video.addEventListener('touchstart', startFastForward);
         video.addEventListener('touchend', stopFastForward);
 
+        // رویداد دابل کلیک/تاپ برای ۵ ثانیه عقب/جلو
         video.addEventListener('click', (e) => {
-            if (isScreenLocked) return;
             if (isHolding) return;
 
             const currentTime = new Date().getTime();
