@@ -9,9 +9,9 @@ from flask_socketio import SocketIO, emit
 import pysrt
 from deep_translator import GoogleTranslator
 
-# مدیریت خروج آنی و سریع با Ctrl+C
+# مدیریت خروج آنی با Ctrl+C
 def signal_handler(sig, frame):
-    print("\n[!] توقف سریع برنامه توسط کاربر...")
+    print("\n[!] توقف برنامه...")
     os._exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -20,7 +20,9 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = "independent_sub_audio_secret"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-STATIC_AUDIO_DIR = os.path.join(os.path.dirname(__file__), "static", "dub_audio")
+# تنظیم مسیر ذخیره‌سازی فایل‌های صوتی سازگار با اندروید
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_AUDIO_DIR = os.path.join(BASE_DIR, "static", "dub_audio")
 os.makedirs(STATIC_AUDIO_DIR, exist_ok=True)
 
 VOICE_MAPPING = {
@@ -38,12 +40,12 @@ VOICE_MAPPING = {
 }
 
 def translate_batch(text_list, target_lang):
-    """ترجمه یکجای کلمات در دسته‌های ۳۰ تایی برای جلوگیری از درخواست‌های متعدد و ارور ۵۰۰"""
+    """ترجمه یکجای متن‌ها در دسته‌های ۳۰ تایی برای جلوگیری از ارور ۵۰۰"""
     if not target_lang or target_lang == "none" or not text_list:
         return text_list
 
     translated_results = []
-    chunk_size = 30  # تعداد خطوط زیرنویس در هر درخواست
+    chunk_size = 30
     delimiter = "\n<<<>>>\n"
 
     for i in range(0, len(text_list), chunk_size):
@@ -58,7 +60,8 @@ def translate_batch(text_list, target_lang):
                 translated_results.extend(translated_chunk)
             else:
                 translated_results.extend(chunk)
-        except Exception:
+        except Exception as e:
+            print(f"[-] خطای ترجمه دسته: {e}")
             translated_results.extend(chunk)
 
     return translated_results
@@ -88,8 +91,8 @@ def process_single_sub(sub_info, gender, audio_lang):
                 loop.run_until_complete(make_tts())
                 loop.close()
                 audio_url = f"/static/dub_audio/{audio_filename}"
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[-] خطای تولید صدا (edge-tts): {e}")
 
     item = {
         "id": i,
@@ -123,7 +126,6 @@ def process_srt():
     audio_lang = request.form.get('audio_lang')
 
     def run_background_process():
-        # پاکسازی فایل‌های قدیمی
         for f in os.listdir(STATIC_AUDIO_DIR):
             try:
                 os.remove(os.path.join(STATIC_AUDIO_DIR, f))
@@ -131,10 +133,9 @@ def process_srt():
                 pass
 
         subs = pysrt.from_string(srt_data)
-        
-        # ۱. جمع‌آوری متون اولیه‌ی زیرنویس
         raw_sub_data = []
         orig_texts = []
+
         for i, sub in enumerate(subs):
             text = sub.text_without_tags.strip()
             if not text:
@@ -150,14 +151,12 @@ def process_srt():
         except Exception:
             pass
 
-        # ۲. ترجمه دسته‌ای سریع (یکجا)
         display_texts = translate_batch(orig_texts, text_lang)
         if audio_lang == text_lang:
             audio_texts = display_texts
         else:
             audio_texts = translate_batch(orig_texts, audio_lang)
 
-        # ۳. ترکیب متن‌های ترجمه‌شده با زمان‌بندی‌ها
         sub_tasks = []
         for idx, (i, orig_text, start_ms, end_ms) in enumerate(raw_sub_data):
             d_text = display_texts[idx] if idx < len(display_texts) else orig_text
@@ -165,11 +164,10 @@ def process_srt():
             sub_tasks.append((i, d_text, a_text, start_ms, end_ms))
 
         try:
-            socketio.emit('status_update', {'msg': 'ترجمه کامل شد. در حال ساخت صداهای گوینده...'})
+            socketio.emit('status_update', {'msg': 'ترجمه انجام شد. در حال ساخت صداهای دوبله...'})
         except Exception:
             pass
 
-        # ۴. ساخت همزمان صداها با ThreadPool (بدون تداخل با گوگل)
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [
                 executor.submit(process_single_sub, task, gender, audio_lang)
@@ -196,5 +194,4 @@ def process_srt():
     return {"status": "ok"}
 
 if __name__ == '__main__':
-    print("سرور فعال شد: http://127.0.0.1:5000 (برای توقف Ctrl+C را بزنید)")
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)

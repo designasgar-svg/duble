@@ -10,10 +10,8 @@ def start_server():
 
 class DubberApp(App):
     def build(self):
-        # اجرای سرور پایتون در پس‌زمینه
         threading.Thread(target=start_server, daemon=True).start()
-        time.sleep(1.5)  # مهلت به سرور برای بالا آمدن
-        
+        time.sleep(2)  # زمان دادن به وب‌سرور برای بالا آمدن کامل
         self.init_webview()
         return BoxLayout()
 
@@ -24,13 +22,20 @@ class DubberApp(App):
         
         WebView = autoclass('android.webkit.WebView')
         WebViewClient = autoclass('android.webkit.WebViewClient')
+        WebChromeClient = autoclass('android.webkit.WebChromeClient')
         
         webview = WebView(mActivity)
-        webview.getSettings().setJavaScriptEnabled(True)
-        webview.getSettings().setDomStorageEnabled(True)
-        webview.getSettings().setAllowFileAccess(True)
-        webview.getSettings().setMediaPlaybackRequiresUserGesture(False)
+        settings = webview.getSettings()
+        
+        # تنظیمات لازم برای اجازه پخش صدا و اسکریپت در تبلت
+        settings.setJavaScriptEnabled(True)
+        settings.setDomStorageEnabled(True)
+        settings.setAllowFileAccess(True)
+        settings.setAllowContentAccess(True)
+        settings.setMediaPlaybackRequiresUserGesture(False)  # برداشتن قفل صدا
+        
         webview.setWebViewClient(WebViewClient())
+        webview.setWebChromeClient(WebChromeClient())
         webview.loadUrl('http://127.0.0.1:5000')
         
         mActivity.setContentView(webview)
