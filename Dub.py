@@ -1,0 +1,234 @@
+import asyncio
+import os
+import sys
+import signal
+import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+import edge_tts
+from flask import Flask, render_template, request, send_from_directory, jsonify
+from flask_socketio import SocketIO, emit
+import pysrt
+from deep_translator import MyMemoryTranslator, GoogleTranslator
+
+# مدیریت خروج آنی با Ctrl+C
+def signal_handler(sig, frame):
+    print("\n[!] توقف برنامه...")
+    os._exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+
+app = Flask(__name__)
+app.config["SECRET_KEY"] = "independent_sub_audio_secret"
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_AUDIO_DIR = os.path.join(BASE_DIR, "static", "dub_audio")
+os.makedirs(STATIC_AUDIO_DIR, exist_ok=True)
+
+VOICE_MAPPING = {
+    "ro": {"female": "ro-RO-AlinaNeural", "male": "ro-RO-EmilNeural"},
+    "fa": {"female": "fa-IR-DilaraNeural", "male": "fa-IR-FaridNeural"},
+    "en": {"female": "en-US-JennyNeural", "male": "en-US-GuyNeural"},
+    "de": {"female": "de-DE-KatjaNeural", "male": "de-DE-KillianNeural"},
+    "fr": {"female": "fr-FR-DeniseNeural", "male": "fr-FR-HenriNeural"},
+    "es": {"female": "es-ES-ElviraNeural", "male": "es-ES-AlvaroNeural"},
+    "it": {"female": "it-IT-ElsaNeural", "male": "it-IT-DiegoNeural"},
+    "tr": {"female": "tr-TR-EmelNeural", "male": "tr-TR-AhmetNeural"},
+    "ru": {"female": "ru-RU-SvetlanaNeural", "male": "ru-RU-DmitryNeural"},
+    "ar": {"female": "ar-SA-ZariyahNeural", "male": "ar-SA-HamedNeural"},
+    "zh": {"female": "zh-CN-XiaoxiaoNeural", "male": "zh-CN-YunjianNeural"}
+}
+
+def translate_single_text(text, target_lang):
+    text_cleaned = text.strip() if text else ""
+    if not target_lang or target_lang == "none" or not text_cleaned:
+        return text
+    
+    # ابتدا سعی می‌کنیم با MyMemory ترجمه کنیم
+    try:
+        res = MyMemoryTranslator(source='auto', target=target_lang).translate(text_cleaned)
+        if res and "MYMEMORY WARNING" not in res.upper() and "QUERY LIMIT" not in res.upper():
+            return res
+    except Exception:
+        pass
+
+    # در صورت ناموفق بودن، سوئیچ به گوگل با تاخیر امن
+    try:
+        time.sleep(0.1)
+        res_g = GoogleTranslator(source='auto', target=target_lang).translate(text_cleaned)
+        if res_g and "error" not in res_g.lower() and "try again" not in res_g.lower():
+            return res_g
+    except Exception:
+        pass
+
+    return text_cleaned
+
+def translate_batch(text_list, target_lang):
+    if not target_lang or target_lang == "none" or not text_list:
+        return text_list
+
+    print(f"[+] در حال ترجمه پایدار {len(text_list)} خط زیرنویس...")
+    # کنترل ترافیک شبکه برای جلوگیری از بلاک شدن
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        translated_results = list(executor.map(lambda t: translate_single_text(t, target_lang), text_list))
+        
+    return translated_results
+
+def process_single_sub(sub_info, gender, audio_lang):
+    if sys.is_finalizing():
+        return None
+
+    i, display_text, audio_text, start_ms, end_ms = sub_info
+    audio_url = None
+
+    clean_audio_text = audio_text.strip() if audio_text else ""
+
+    if audio_lang and audio_lang != "none" and clean_audio_text:
+        voices = VOICE_MAPPING.get(audio_lang, VOICE_MAPPING["en"])
+        voice = voices["female"] if gender == "female" else voices["male"]
+
+        audio_filename = f"audio_{start_ms}.mp3"
+        audio_out_path = os.path.join(STATIC_AUDIO_DIR, audio_filename)
+
+        async def make_tts_with_retry():
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    communicate = edge_tts.Communicate(clean_audio_text, voice)
+                    await communicate.save(audio_out_path)
+                    return True
+                except Exception as err:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(1)
+                    else:
+                        raise err
+
+        try:
+            if not sys.is_finalizing():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(make_tts_with_retry())
+                loop.close()
+                audio_url = f"/static/dub_audio/{audio_filename}"
+                print(f"[+] فایل ساخته شد: {audio_filename}")
+        except Exception as e:
+            print(f"[!] خطای ساخت صدا در زیرنویس {i}: {type(e).__name__} - {e}")
+
+    item = {
+        "id": i,
+        "display_text": display_text,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "audio_url": audio_url,
+        "played": False
+    }
+    
+    try:
+        socketio.emit('chunk_ready', item)
+    except Exception as e:
+        print(f"[!] خطای ارسال به سوکت: {e}")
+        
+    return item
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/static/dub_audio/<filename>')
+def serve_audio(filename):
+    return send_from_directory(STATIC_AUDIO_DIR, filename)
+
+@app.route('/process', methods=['POST'])
+def process_srt():
+    try:
+        srt_data = request.form.get('srt_data')
+        gender = request.form.get('gender', 'male')
+        text_lang = request.form.get('text_lang', 'fa')
+        audio_lang = request.form.get('audio_lang', 'ro')
+
+        if not srt_data:
+            return jsonify({"status": "error", "message": "اطلاعات زیرنویس دریافت نشد"}), 400
+
+        def run_background_process():
+            try:
+                for f in os.listdir(STATIC_AUDIO_DIR):
+                    try:
+                        os.remove(os.path.join(STATIC_AUDIO_DIR, f))
+                    except Exception:
+                        pass
+
+                try:
+                    subs = pysrt.from_string(srt_data)
+                except Exception as srt_err:
+                    print(f"[!] خطای ساختار زیرنویس: {srt_err}")
+                    socketio.emit('status_update', {'msg': '❌ فرمت فایل زیرنویس نامعتبر است.'})
+                    return
+
+                raw_sub_data = []
+                orig_texts = []
+
+                for i, sub in enumerate(subs):
+                    text = sub.text_without_tags.strip()
+                    if not text:
+                        continue
+                    start_ms = (sub.start.hours * 3600 + sub.start.minutes * 60 + sub.start.seconds) * 1000 + sub.start.milliseconds
+                    end_ms = (sub.end.hours * 3600 + sub.end.minutes * 60 + sub.end.seconds) * 1000 + sub.end.milliseconds
+                    
+                    raw_sub_data.append((i, text, start_ms, end_ms))
+                    orig_texts.append(text)
+
+                if not orig_texts:
+                    socketio.emit('status_update', {'msg': '❌ محتوای متنی در زیرنویس یافت نشد.'})
+                    return
+
+                socketio.emit('status_update', {'msg': f'در حال ترجمه پایدار {len(orig_texts)} خط زیرنویس...'})
+
+                display_texts = translate_batch(orig_texts, text_lang)
+                if audio_lang == text_lang:
+                    audio_texts = display_texts
+                else:
+                    audio_texts = translate_batch(orig_texts, audio_lang)
+
+                sub_tasks = []
+                for idx, (i, orig_text, start_ms, end_ms) in enumerate(raw_sub_data):
+                    d_text = display_texts[idx] if idx < len(display_texts) else orig_text
+                    a_text = audio_texts[idx] if idx < len(audio_texts) else orig_text
+                    sub_tasks.append((i, d_text, a_text, start_ms, end_ms))
+
+                socketio.emit('status_update', {'msg': 'ترجمه انجام شد. در حال ساخت صداهای دوبله...'})
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(process_single_sub, task, gender, audio_lang)
+                        for task in sub_tasks
+                    ]
+                    for future in futures:
+                        if sys.is_finalizing():
+                            break
+                        try:
+                            res = future.result()
+                            if res is None:
+                                break
+                        except Exception as e:
+                            print(f"[!] خطای اجرای ترد: {e}")
+                            break
+
+                socketio.emit('processing_finished', {})
+
+            except Exception as bg_err:
+                print(f"[!] خطای پس‌زمینه:")
+                traceback.print_exc()
+
+        import threading
+        t = threading.Thread(target=run_background_process, daemon=True)
+        t.start()
+        return jsonify({"status": "ok"})
+
+    except Exception as e:
+        print(f"[!] خطای شدید در /process:")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
