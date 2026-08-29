@@ -37,7 +37,7 @@
         button.fullscreen-btn:hover { background: #e68a00; }
         button:disabled { background: #444; cursor: not-allowed; }
         
-        .video-wrapper { position: relative; width: 100%; margin-top: 15px; background: #000; border-radius: 8px; overflow: hidden; }
+        .video-wrapper { position: relative; width: 100%; margin-top: 15px; background: #000; border-radius: 8px; overflow: hidden; transition: all 0.3s ease; }
         video { width: 100%; max-height: 440px; display: block; }
 
         /* دکمه‌های شناور کنترل تمام صفحه */
@@ -99,6 +99,7 @@
             z-index: 2147483646;
         }
 
+        /* استایل تمام‌صفحه متداول مرورگر */
         .video-wrapper:-webkit-full-screen,
         .video-wrapper:-moz-full-screen,
         .video-wrapper:fullscreen {
@@ -119,10 +120,35 @@
         }
 
         .video-wrapper:fullscreen .subtitle-overlay,
-        .video-wrapper:-webkit-full-screen .subtitle-overlay {
+        .video-wrapper:-webkit-full-screen .subtitle-overlay,
+        .video-wrapper.pseudo-fullscreen .subtitle-overlay {
             bottom: 80px;
             font-size: 34px;
             z-index: 2147483646;
+        }
+
+        /* --- حالت جدید: چرخش ۹۰ درجه هوشمند در تمام‌صفحه --- */
+        .video-wrapper.rotated-force {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vh !important;
+            height: 100vw !important;
+            transform: rotate(90deg) translateY(-100%);
+            transform-origin: top left;
+            z-index: 2147483645 !important;
+            border-radius: 0 !important;
+            background: #000 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+
+        .video-wrapper.rotated-force video {
+            width: 100% !important;
+            height: 100% !important;
+            max-height: 100vh !important;
+            object-fit: contain !important;
         }
 
         #status { color: #17a2b8; margin: 12px 0; font-weight: bold; font-size: 15px; min-height: 22px; }
@@ -220,6 +246,7 @@
         
         <div class="video-wrapper" id="videoContainer">
             <div id="fsControls" class="fs-controls-overlay">
+                <button id="rotateBtn" class="fs-btn" onclick="toggleVideoOrientation(event)">🔄 چرخش صفحه</button>
                 <button id="lockBtn" class="fs-btn fs-btn-lock" onclick="toggleScreenLock(event)">🔓 قفل لمس</button>
                 <button id="exitFsBtn" class="fs-btn" onclick="exitFullscreenHandler(event)">✖ خروج از تمام‌صفحه</button>
             </div>
@@ -257,17 +284,16 @@
         let dubbingMap = {};
         let syncOffsetMs = 0;
 
-        // متغیرهای کنترلی جدید
         let holdTimer = null;
         let isHolding = false;
         let lastTapTime = 0;
         let isScreenLocked = false;
+        let isRotated = false;
         let fsControlsTimeout = null;
 
         video.volume = parseFloat(videoVolSlider.value);
         audioPlayer.volume = parseFloat(dubVolSlider.value);
 
-        // --- مدیریت نمایش کنترل‌های فوقانی ---
         function showFsControls() {
             fsControls.classList.add('active');
             clearTimeout(fsControlsTimeout);
@@ -286,7 +312,51 @@
             showFsControls();
         });
 
-        // --- قفل لمس صفحه ---
+        // --- مدیریت چرخش صفحه در تمام صفحات ---
+        async function toggleVideoOrientation(e) {
+            if (e) e.stopPropagation();
+
+            const isNativeFullscreen = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement;
+
+            // اگر در حالت تمام‌صفحه بومی مرورگر قرار دارد، ابتدا از آن خارج می‌شویم تا CSS Rotation عمل کند
+            if (isNativeFullscreen) {
+                if (document.exitFullscreen) await document.exitFullscreen();
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+            }
+
+            // ابتدا تست API قفل سیستم برای دستگاه‌هایی مانند تبلت
+            if (screen.orientation && screen.orientation.lock) {
+                try {
+                    if (!isRotated) {
+                        await screen.orientation.lock('landscape');
+                        isRotated = true;
+                        appendLog("🔄 چرخش صفحه سیستم به افقی");
+                        showFsControls();
+                        return;
+                    } else {
+                        await screen.orientation.unlock();
+                        isRotated = false;
+                        appendLog("🔄 بازگشت به حالت عمودی");
+                        showFsControls();
+                        return;
+                    }
+                } catch (err) {
+                    console.log("استفاده از چرخش اختصاصی CSS...", err);
+                }
+            }
+
+            // چرخاندن ویدیو با CSS (مناسب برای لپ‌تاپ و مرورگرهایی که lock را پشتیبانی نمی‌کنند)
+            isRotated = !isRotated;
+            if (isRotated) {
+                videoContainer.classList.add('rotated-force');
+                appendLog("🔄 چرخش افقی روی لپ‌تاپ/تبلت انجام شد.");
+            } else {
+                videoContainer.classList.remove('rotated-force');
+                appendLog("🔄 بازگشت به حالت معمولی");
+            }
+            showFsControls();
+        }
+
         function toggleScreenLock(e) {
             if (e) e.stopPropagation();
             isScreenLocked = !isScreenLocked;
@@ -309,7 +379,11 @@
 
         function exitFullscreenHandler(e) {
             if (e) e.stopPropagation();
-            toggleCustomFullscreen();
+            if (isRotated) {
+                toggleVideoOrientation();
+            } else {
+                toggleCustomFullscreen();
+            }
         }
 
         async function toggleCustomFullscreen() {
@@ -353,7 +427,7 @@
                 document.mozFullScreenElement ||
                 document.msFullscreenElement;
 
-            if (!isFullscreen) {
+            if (!isFullscreen && !isRotated) {
                 videoContainer.style.width = "";
                 videoContainer.style.height = "";
                 videoContainer.style.position = "";
@@ -526,10 +600,7 @@
             fetch('/process', { method: 'POST', body: formData });
         }
 
-        // ==========================================
-        // --- کنترل‌های ژست حرکتی پلیر (با پشتیبانی از قفل صفحه) ---
-        // ==========================================
-
+        // --- کنترل‌های ژست حرکتی پلیر ---
         function startFastForward() {
             if (isScreenLocked) return;
             holdTimer = setTimeout(() => {
