@@ -9,7 +9,8 @@ from flask import Flask, render_template, request, send_from_directory, jsonify
 from flask_socketio import SocketIO
 import pysrt
 from mtranslate import translate
-
+import threading
+import webview
 def signal_handler(sig, frame):
     print("\n[!] توقف برنامه...")
     os._exit(0)
@@ -178,4 +179,19 @@ def process_srt():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+    # ۱. اجرای سِروِر Flask/SocketIO در یک Thread پس‌زمینه
+    server_thread = threading.Thread(
+        target=lambda: socketio.run(app, host='127.0.0.1', port=5000, debug=False, use_reloader=False),
+        daemon=True
+    )
+    server_thread.start()
+
+    # ۲. ایجاد و اجرای پنجره یکپارچه برنامه
+    webview.create_window(
+        title='مترجم و دوبلور هوشمند زیرنویس',
+        url='http://127.0.0.1:5000',
+        width=1000,
+        height=800,
+        resizable=True
+    )
+    webview.start()

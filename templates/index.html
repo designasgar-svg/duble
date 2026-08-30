@@ -38,7 +38,7 @@
         button:disabled { background: #444; cursor: not-allowed; }
         
         .video-wrapper { position: relative; width: 100%; margin-top: 15px; background: #000; border-radius: 8px; overflow: hidden; transition: all 0.3s ease; }
-        video { width: 100%; max-height: 440px; display: block; }
+        video { width: 100%; max-height: 440px; display: block; transition: transform 0.3s ease; }
 
         /* دکمه‌های شناور کنترل تمام صفحه */
         .fs-controls-overlay {
@@ -99,56 +99,52 @@
             z-index: 2147483646;
         }
 
-        /* استایل تمام‌صفحه متداول مرورگر */
+        /* استایل تمام‌صفحه بومی مرورگر */
         .video-wrapper:-webkit-full-screen,
         .video-wrapper:-moz-full-screen,
         .video-wrapper:fullscreen {
-            width: 100vw;
-            height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: #000;
+            width: 100vw !important;
+            height: 100vh !important;
+            background: #000 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            overflow: hidden !important;
         }
         
         .video-wrapper:fullscreen video,
         .video-wrapper:-webkit-full-screen video {
-            max-height: 100vh;
-            width: 100%;
-            height: 100%;
+            max-width: 100%;
+            max-height: 100%;
             object-fit: contain;
         }
 
         .video-wrapper:fullscreen .subtitle-overlay,
-        .video-wrapper:-webkit-full-screen .subtitle-overlay,
-        .video-wrapper.pseudo-fullscreen .subtitle-overlay {
+        .video-wrapper:-webkit-full-screen .subtitle-overlay {
             bottom: 80px;
             font-size: 34px;
             z-index: 2147483646;
         }
 
-        /* --- حالت جدید: چرخش ۹۰ درجه هوشمند در تمام‌صفحه --- */
-        .video-wrapper.rotated-force {
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
+        /* حالت‌های چرخش ویدیو در تمام‌صفحه */
+        .video-wrapper.rot-90 video {
+            transform: rotate(90deg);
             width: 100vh !important;
             height: 100vw !important;
-            transform: rotate(90deg) translateY(-100%);
-            transform-origin: top left;
-            z-index: 2147483645 !important;
-            border-radius: 0 !important;
-            background: #000 !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
+            max-width: none !important;
+            max-height: none !important;
         }
 
-        .video-wrapper.rotated-force video {
-            width: 100% !important;
-            height: 100% !important;
-            max-height: 100vh !important;
-            object-fit: contain !important;
+        .video-wrapper.rot-180 video {
+            transform: rotate(180deg);
+        }
+
+        .video-wrapper.rot-270 video {
+            transform: rotate(270deg);
+            width: 100vh !important;
+            height: 100vw !important;
+            max-width: none !important;
+            max-height: none !important;
         }
 
         #status { color: #17a2b8; margin: 12px 0; font-weight: bold; font-size: 15px; min-height: 22px; }
@@ -288,7 +284,7 @@
         let isHolding = false;
         let lastTapTime = 0;
         let isScreenLocked = false;
-        let isRotated = false;
+        let currentAngle = 0;
         let fsControlsTimeout = null;
 
         video.volume = parseFloat(videoVolSlider.value);
@@ -312,48 +308,30 @@
             showFsControls();
         });
 
-        // --- مدیریت چرخش صفحه در تمام صفحات ---
-        async function toggleVideoOrientation(e) {
+        // --- مدیریت چرخش متوالی فقط در حالت تمام‌صفحه ---
+        function toggleVideoOrientation(e) {
             if (e) e.stopPropagation();
 
-            const isNativeFullscreen = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement;
-
-            // اگر در حالت تمام‌صفحه بومی مرورگر قرار دارد، ابتدا از آن خارج می‌شویم تا CSS Rotation عمل کند
-            if (isNativeFullscreen) {
-                if (document.exitFullscreen) await document.exitFullscreen();
-                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+            const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement;
+            
+            if (!isFullscreen) {
+                alert("لطفاً ابتدا حالت تمام‌صفحه را فعال کنید.");
+                return;
             }
 
-            // ابتدا تست API قفل سیستم برای دستگاه‌هایی مانند تبلت
-            if (screen.orientation && screen.orientation.lock) {
-                try {
-                    if (!isRotated) {
-                        await screen.orientation.lock('landscape');
-                        isRotated = true;
-                        appendLog("🔄 چرخش صفحه سیستم به افقی");
-                        showFsControls();
-                        return;
-                    } else {
-                        await screen.orientation.unlock();
-                        isRotated = false;
-                        appendLog("🔄 بازگشت به حالت عمودی");
-                        showFsControls();
-                        return;
-                    }
-                } catch (err) {
-                    console.log("استفاده از چرخش اختصاصی CSS...", err);
-                }
+            videoContainer.classList.remove('rot-90', 'rot-180', 'rot-270');
+
+            currentAngle = (currentAngle + 90) % 360;
+
+            if (currentAngle === 90) {
+                videoContainer.classList.add('rot-90');
+            } else if (currentAngle === 180) {
+                videoContainer.classList.add('rot-180');
+            } else if (currentAngle === 270) {
+                videoContainer.classList.add('rot-270');
             }
 
-            // چرخاندن ویدیو با CSS (مناسب برای لپ‌تاپ و مرورگرهایی که lock را پشتیبانی نمی‌کنند)
-            isRotated = !isRotated;
-            if (isRotated) {
-                videoContainer.classList.add('rotated-force');
-                appendLog("🔄 چرخش افقی روی لپ‌تاپ/تبلت انجام شد.");
-            } else {
-                videoContainer.classList.remove('rotated-force');
-                appendLog("🔄 بازگشت به حالت معمولی");
-            }
+            appendLog(`🔄 چرخش ویدیو در تمام‌صفحه: ${currentAngle} درجه`);
             showFsControls();
         }
 
@@ -379,9 +357,7 @@
 
         function exitFullscreenHandler(e) {
             if (e) e.stopPropagation();
-            if (isRotated) {
-                toggleVideoOrientation();
-            } else {
+            if (document.fullscreenElement || document.webkitFullscreenElement) {
                 toggleCustomFullscreen();
             }
         }
@@ -427,17 +403,15 @@
                 document.mozFullScreenElement ||
                 document.msFullscreenElement;
 
-            if (!isFullscreen && !isRotated) {
-                videoContainer.style.width = "";
-                videoContainer.style.height = "";
-                videoContainer.style.position = "";
-                videoContainer.style.top = "";
-                videoContainer.style.left = "";
+            if (!isFullscreen) {
+                currentAngle = 0;
+                videoContainer.classList.remove('rot-90', 'rot-180', 'rot-270');
                 
                 if (isScreenLocked) {
                     toggleScreenLock();
                 }
                 fsControls.classList.remove('active');
+                appendLog("📺 خروج از تمام‌صفحه - بازگشت به تنظیمات اولیه");
             } else {
                 showFsControls();
             }
