@@ -38,7 +38,7 @@
         button:disabled { background: #444; cursor: not-allowed; }
         
         .video-wrapper { position: relative; width: 100%; margin-top: 15px; background: #000; border-radius: 8px; overflow: hidden; transition: all 0.3s ease; }
-        video { width: 100%; max-height: 440px; display: block; transition: transform 0.3s ease; }
+        video { width: 100%; max-height: 440px; display: block; }
 
         /* دکمه‌های شناور کنترل تمام صفحه */
         .fs-controls-overlay {
@@ -99,52 +99,39 @@
             z-index: 2147483646;
         }
 
-        /* استایل تمام‌صفحه بومی مرورگر */
-        .video-wrapper:-webkit-full-screen,
-        .video-wrapper:-moz-full-screen,
+        /* استایل تمام‌صفحه کانتینر شامل ویدیو و زیرنویس */
         .video-wrapper:fullscreen {
             width: 100vw !important;
             height: 100vh !important;
-            background: #000 !important;
+            border-radius: 0 !important;
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
-            overflow: hidden !important;
+            background: #000 !important;
         }
-        
-        .video-wrapper:fullscreen video,
+
+        .video-wrapper:fullscreen video {
+            max-height: 100vh !important;
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: contain !important;
+        }
+
+        .video-wrapper:-webkit-full-screen {
+            width: 100vw !important;
+            height: 100vh !important;
+            border-radius: 0 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            background: #000 !important;
+        }
+
         .video-wrapper:-webkit-full-screen video {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-        }
-
-        .video-wrapper:fullscreen .subtitle-overlay,
-        .video-wrapper:-webkit-full-screen .subtitle-overlay {
-            bottom: 80px;
-            font-size: 34px;
-            z-index: 2147483646;
-        }
-
-        /* حالت‌های چرخش ویدیو در تمام‌صفحه */
-        .video-wrapper.rot-90 video {
-            transform: rotate(90deg);
-            width: 100vh !important;
-            height: 100vw !important;
-            max-width: none !important;
-            max-height: none !important;
-        }
-
-        .video-wrapper.rot-180 video {
-            transform: rotate(180deg);
-        }
-
-        .video-wrapper.rot-270 video {
-            transform: rotate(270deg);
-            width: 100vh !important;
-            height: 100vw !important;
-            max-width: none !important;
-            max-height: none !important;
+            max-height: 100vh !important;
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: contain !important;
         }
 
         #status { color: #17a2b8; margin: 12px 0; font-weight: bold; font-size: 15px; min-height: 22px; }
@@ -242,7 +229,6 @@
         
         <div class="video-wrapper" id="videoContainer">
             <div id="fsControls" class="fs-controls-overlay">
-                <button id="rotateBtn" class="fs-btn" onclick="toggleVideoOrientation(event)">🔄 چرخش صفحه</button>
                 <button id="lockBtn" class="fs-btn fs-btn-lock" onclick="toggleScreenLock(event)">🔓 قفل لمس</button>
                 <button id="exitFsBtn" class="fs-btn" onclick="exitFullscreenHandler(event)">✖ خروج از تمام‌صفحه</button>
             </div>
@@ -284,7 +270,6 @@
         let isHolding = false;
         let lastTapTime = 0;
         let isScreenLocked = false;
-        let currentAngle = 0;
         let fsControlsTimeout = null;
 
         video.volume = parseFloat(videoVolSlider.value);
@@ -307,33 +292,6 @@
             if (e.target.closest('.fs-controls-overlay')) return;
             showFsControls();
         });
-
-        // --- مدیریت چرخش متوالی فقط در حالت تمام‌صفحه ---
-        function toggleVideoOrientation(e) {
-            if (e) e.stopPropagation();
-
-            const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement;
-            
-            if (!isFullscreen) {
-                alert("لطفاً ابتدا حالت تمام‌صفحه را فعال کنید.");
-                return;
-            }
-
-            videoContainer.classList.remove('rot-90', 'rot-180', 'rot-270');
-
-            currentAngle = (currentAngle + 90) % 360;
-
-            if (currentAngle === 90) {
-                videoContainer.classList.add('rot-90');
-            } else if (currentAngle === 180) {
-                videoContainer.classList.add('rot-180');
-            } else if (currentAngle === 270) {
-                videoContainer.classList.add('rot-270');
-            }
-
-            appendLog(`🔄 چرخش ویدیو در تمام‌صفحه: ${currentAngle} درجه`);
-            showFsControls();
-        }
 
         function toggleScreenLock(e) {
             if (e) e.stopPropagation();
@@ -362,6 +320,7 @@
             }
         }
 
+        // --- تمام‌صفحه کردن کانتینر اصلی (شامل ویدیو و زیرنویس) ---
         async function toggleCustomFullscreen() {
             const isFullscreen =
                 document.fullscreenElement ||
@@ -374,21 +333,21 @@
                     if (videoContainer.requestFullscreen) {
                         await videoContainer.requestFullscreen();
                     } else if (videoContainer.webkitRequestFullscreen) {
-                        videoContainer.webkitRequestFullscreen();
+                        await videoContainer.webkitRequestFullscreen();
                     } else if (videoContainer.mozRequestFullScreen) {
-                        videoContainer.mozRequestFullScreen();
+                        await videoContainer.mozRequestFullScreen();
                     } else if (videoContainer.msRequestFullscreen) {
-                        videoContainer.msRequestFullscreen();
+                        await videoContainer.msRequestFullscreen();
                     }
                 } else {
                     if (document.exitFullscreen) {
                         await document.exitFullscreen();
                     } else if (document.webkitExitFullscreen) {
-                        document.webkitExitFullscreen();
+                        await document.webkitExitFullscreen();
                     } else if (document.mozCancelFullScreen) {
-                        document.mozCancelFullScreen();
+                        await document.mozCancelFullScreen();
                     } else if (document.msExitFullscreen) {
-                        document.msExitFullscreen();
+                        await document.msExitFullscreen();
                     }
                 }
             } catch (error) {
@@ -404,14 +363,11 @@
                 document.msFullscreenElement;
 
             if (!isFullscreen) {
-                currentAngle = 0;
-                videoContainer.classList.remove('rot-90', 'rot-180', 'rot-270');
-                
                 if (isScreenLocked) {
                     toggleScreenLock();
                 }
                 fsControls.classList.remove('active');
-                appendLog("📺 خروج از تمام‌صفحه - بازگشت به تنظیمات اولیه");
+                appendLog("📺 خروج از تمام‌صفحه");
             } else {
                 showFsControls();
             }
