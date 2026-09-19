@@ -136,6 +136,33 @@
 
         #status { color: #17a2b8; margin: 12px 0; font-weight: bold; font-size: 15px; min-height: 22px; }
         #log { background: #000; color: #0f0; padding: 10px; border-radius: 6px; height: 100px; overflow-y: auto; text-align: left; font-family: monospace; font-size: 11px; margin-top: 10px; }
+        /* استایل پیام‌های محو شونده (Toast Notification) */
+        #toast-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast-message {
+            background-color: #323232;
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            font-size: 14px;
+            opacity: 1;
+            transition: opacity 0.5s ease-in-out, transform 0.5s ease-in-out;
+            transform: translateY(0);
+        }
+
+        .toast-message.fade-out {
+            opacity: 0;
+            transform: translateY(20px);
+        }
     </style>
 </head>
 <body>
@@ -275,7 +302,29 @@
 
         video.volume = parseFloat(videoVolSlider.value);
         audioPlayer.volume = parseFloat(dubVolSlider.value);
+        function showToast(message, duration = 4000) {
+            // پیدا کردن یا ساختن کانتینر پیام‌ها در صفحه
+            let container = document.getElementById('toast-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'toast-container';
+                document.body.appendChild(container);
+            }
 
+            // ساخت المان پیام
+            const toast = document.createElement('div');
+            toast.className = 'toast-message';
+            toast.innerText = message;
+            container.appendChild(toast);
+
+            // زمان‌بندی برای محو شدن و حذف خودکار پیام پس از چند ثانیه
+            setTimeout(() => {
+                toast.classList.add('fade-out');
+                setTimeout(() => {
+                    toast.remove();
+                }, 500); // زمان تطابق با انیمیشن CSS
+            }, duration);
+        }
         function showFsControls() {
             fsControls.classList.add('active');
             clearTimeout(fsControlsTimeout);
@@ -527,9 +576,9 @@
                 statusDiv.innerText = result.message;
                 appendLog(result.message);
 
-                if (result.has_sub) {
+             if (result.has_sub) {
                     // اگر زیرنویس داشت، می‌توانیم به کاربر اعلام کنیم آماده پردازش است
-                    alert(result.message);
+                    showToast(result.message); // <-- اصلاح به result
                 }
             } catch (err) {
                 appendLog("⚠️ امکان بررسی خودکار زیرنویس ویدیو وجود ندارد: " + err);
