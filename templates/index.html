@@ -143,20 +143,21 @@
         <h2>🎙️ پنل ترجمه و دوبله هوشمند زیرنویس</h2>
         
         <div class="form-group">
-            <div>
-                <label>۱. انتخاب فایل ویدیو:</label>
-                <input type="file" id="videoFile" accept="video/*" onchange="loadVideo(event)">
-            </div>
-            <div>
-                <label>۲. انتخاب فایل زیرنویس (.srt):</label>
-                <input type="file" id="srtFile" accept=".srt">
-            </div>
+                <div>
+                    <label>۱. انتخاب فایل ویدیو (بررسی خودکار زیرنویس چسبیده):</label>
+                    <input type="file" id="videoFile" accept="video/*" onchange="loadVideoAndCheckSub(event)">
+                </div>
+                <div>
+                    <label>۲. انتخاب فایل زیرنویس جداگانه (.srt) - [اختیاری]:</label>
+                    <input type="file" id="srtFile" accept=".srt">
+                </div>
         </div>
 
         <div class="panel-box">
             <div class="panel-title">⚙️ تنظیمات زبان، ترجمه و دوبله</div>
             
             <div class="form-group">
+
                 <div>
                     <label>📝 زبان زیرنویس (نمایش روی ویدیو):</label>
                     <select id="textLang">
@@ -502,15 +503,48 @@
                 dubbingMap[id].played = dubbingMap[id].end_ms < currentTimeMs;
             }
         };
+        async function loadVideoAndCheckSub(event) {
+            const file = event.target.files[0];
+            if (!file) return;
 
+            // بارگذاری ویدیو در پلیر جهت نمایش
+            video.src = URL.createObjectURL(file);
+            video.volume = parseFloat(videoVolSlider.value);
+            statusDiv.innerText = "ویدیو بارگذاری شد. در حال بررسی زیرنویس داخلی...";
+            appendLog("📁 ویدیو انتخاب شد: " + file.name);
+
+            // ارسال ویدیو به سرور برای چک کردن زیرنویس چسبیده/جاسازی‌شده
+            const formData = new FormData();
+            formData.append('videoFile', file);
+
+            try {
+                let response = await fetch('/check_video_sub', {
+                    method: 'POST',
+                    body: formData
+                });
+                let result = await response.json();
+                
+                statusDiv.innerText = result.message;
+                appendLog(result.message);
+
+                if (result.has_sub) {
+                    // اگر زیرنویس داشت، می‌توانیم به کاربر اعلام کنیم آماده پردازش است
+                    alert(result.message);
+                }
+            } catch (err) {
+                appendLog("⚠️ امکان بررسی خودکار زیرنویس ویدیو وجود ندارد: " + err);
+                statusDiv.innerText = "ویدیو بارگذاری شد. (زیرنویس بررسی نشد)";
+            }
+        }
         async function startProcessing() {
+            const videoInput = document.getElementById('videoFile');
             const srtInput = document.getElementById('srtFile');
             const voiceGender = document.getElementById('voiceGender').value;
             const textLang = document.getElementById('textLang').value;
             const audioLang = document.getElementById('audioLang').value;
 
-            if (!srtInput.files[0]) {
-                alert("لطفاً فایل زیرنویس SRT را انتخاب کنید.");
+            if (!videoInput.files[0] && !srtInput.files[0]) {
+                alert("لطفاً حداقل فایل ویدیو یا فایل زیرنویس را انتخاب کنید.");
                 return;
             }
 
@@ -518,14 +552,20 @@
             logDiv.innerHTML = "";
             dubbingMap = {};
 
-            statusDiv.innerText = "⏳ در حال آنالیز، ترجمه و ساخت صدا...";
+            statusDiv.innerText = "⏳ در حال آنالیز، استخراج و ترجمه...";
 
-            const srtText = await srtInput.files[0].text();
             const formData = new FormData();
-            formData.append('srt_data', srtText);
             formData.append('gender', voiceGender);
             formData.append('text_lang', textLang);
             formData.append('audio_lang', audioLang);
+
+            // اگر کاربر فایل SRT جدا ندაشت، ویدیو را می‌فرستیم تا سرور خودش زیرنویس را استخراج کند
+            if (srtInput.files[0]) {
+                const srtText = await srtInput.files[0].text();
+                formData.append('srt_data', srtText);
+            } else if (videoInput.files[0]) {
+                formData.append('video_file_obj', videoInput.files[0]);
+            }
 
             fetch('/process', { method: 'POST', body: formData });
         }
