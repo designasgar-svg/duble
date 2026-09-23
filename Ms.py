@@ -6,6 +6,10 @@ import time
 import traceback
 import threading
 import webbrowser
+import subprocess
+import json
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 # ۱. رفع خطای sys.argv در Termux قبل از import کردن webview
 if not sys.argv or sys.argv[0] is None:
@@ -21,7 +25,7 @@ import edge_tts
 from flask import Flask, render_template, request, send_from_directory, jsonify
 from flask_socketio import SocketIO
 import pysrt
-from mtranslate import translate
+from translatepy import Translator
 
 def signal_handler(sig, frame):
     print("\n[!] توقف برنامه...")
@@ -36,6 +40,62 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_AUDIO_DIR = os.path.join(BASE_DIR, "static", "dub_audio")
 os.makedirs(STATIC_AUDIO_DIR, exist_ok=True)
+@app.route('/check_video_sub', methods=['POST'])
+def check_video_sub():
+    """بررسی فایل ویدیو برای یافتن زیرنویس‌های داخلی (Embedded Subtitles)"""
+    if 'videoFile' not in request.files:
+        return jsonify({"has_sub": False, "message": "فایل ویدیویی دریافت نشد."})
+    
+    file = request.files['videoFile']
+    if file.filename == '':
+        return jsonify({"has_sub": False, "message": "فایلی انتخاب نشده است."})
+
+    try:
+        # ذخیره موقت ویدیو برای بررسی با ffprobe
+        temp_dir = tempfile.gettempdir()
+        temp_video_path = os.path.join(temp_dir, file.filename)
+        file.save(temp_video_path)
+
+        cmd = [
+            "ffprobe", 
+            "-v", "quiet", 
+            "-print_format", "json", 
+            "-show_streams", 
+            temp_video_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        data = json.loads(result.stdout)
+        
+        # پیدا کردن استریم‌های زیرنویس
+        subtitle_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "subtitle"]
+        
+        has_sub = len(subtitle_streams) > 0
+        lang = "نامشخص"
+        if has_sub:
+            # تلاش برای پیدا کردن زبان اولین زیرنویس داخلی
+            tags = subtitle_streams[0].get("tags", {})
+            lang = tags.get("language", "معمولی")
+
+        # پاکسازی فایل موقت ویدیو
+        try:
+            os.remove(temp_video_path)
+        except:
+            pass
+
+        if has_sub:
+            return jsonify({
+                "has_sub": True, 
+                "message": f"✅ ویدیو دارای زیرنویس داخلی (زبان: {lang}) است!"
+            })
+        else:
+            return jsonify({
+                "has_sub": False, 
+                "message": "ℹ️ این ویدیو زیرنویس داخلی چسبیده ندارد. لطفاً فایل SRT جداگانه انتخاب کنید."
+            })
+
+    except Exception as e:
+        print(f"[!] خطای بررسی زیرنویس ویدیو: {e}")
+        return jsonify({"has_sub": False, "message": "خطا در بررسی فایل ویدیو (ممکن است ابزار ffprobe روی سیستم نصب نباشد)."}), 500
 
 VOICE_MAPPING = {
     "ro": {"female": "ro-RO-AlinaNeural", "male": "ro-RO-EmilNeural"},
@@ -51,16 +111,19 @@ VOICE_MAPPING = {
     "zh": {"female": "zh-CN-XiaoxiaoNeural", "male": "zh-CN-YunjianNeural"}
 }
 
+# راه‌اندازی مترجم قدرتمند با قابلیت سوییچ خودکار بین موتورها
+translator = Translator()
+
 def safe_single_translate(text, target_lang):
-    """ترجمه تک‌به‌تک و کاملاً ضد خطا"""
+    """ترجمه امن و ضد خطا با translatepy"""
     if not target_lang or target_lang == "none" or not text or not str(text).strip():
         return str(text) if text else ""
     try:
-        res = translate(text, target_lang)
-        if res and isinstance(res, str) and res.strip():
-            return res.strip()
+        res = translator.translate(text, destination_language=target_lang)
+        if res and str(res).strip():
+            return str(res).strip()
     except Exception as e:
-        print(f"[!] خطای شبکه در ترجمه: {e}")
+        print(f"[!] خطای ترجمه: {e}")
     return str(text).strip()
 
 def process_single_sub(sub_info, gender, audio_lang):
@@ -126,14 +189,51 @@ def serve_audio(filename):
 @app.route('/process', methods=['POST'])
 def process_srt():
     try:
-        data = request.get_json(silent=True) or request.form
+        data = request.form
         srt_data = data.get('srt_data')
         gender = data.get('gender', 'male')
         text_lang = data.get('text_lang', 'fa')
         audio_lang = data.get('audio_lang', 'ro')
 
+        video_file = request.files.get('video_file_obj')
+
+        # اگر فایل SRT مستقیم ارسال نشده بود، اما ویدیو ارسال شده بود، سعی کن از ویدیو زیرنویس استخراج کنی
+        if not srt_data and video_file and video_file.filename != '':
+            try:
+                temp_dir = tempfile.gettempdir()
+                temp_vid_path = os.path.join(temp_dir, f"extract_{video_file.filename}")
+                video_file.save(temp_vid_path)
+
+                temp_srt_path = os.path.join(temp_dir, "extracted_sub.srt")
+                
+                # دستور ffmpeg برای استخراج اولین استریم زیرنویس ویدیو به فرمت srt
+                # (اگر زیرنویس مبتنی بر متن باشد مثل ass یا srt)
+                extract_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", temp_vid_path,
+                    "-map", "0:s:0", # انتخاب اولین استریم زیرنویس
+                    temp_srt_path
+                ]
+                
+                res = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=15)
+                
+                if res.returncode == 0 and os.path.exists(temp_srt_path) and os.path.getsize(temp_srt_path) > 0:
+                    with open(temp_srt_path, 'r', encoding='utf-8', errors='ignore') as f_srt:
+                        srt_data = f_srt.read()
+                
+                # پاکسازی فایل‌های موقت
+                for p in [temp_vid_path, temp_srt_path]:
+                    if os.path.exists(p):
+                        try: os.remove(p)
+                        except: pass
+            except Exception as e:
+                print(f"[!] خطا در استخراج خودکار زیرنویس از ویدیو: {e}")
+
         if not srt_data:
-            return jsonify({"status": "error", "message": "اطلاعات زیرنویس دریافت نشد"}), 400
+            return jsonify({"status": "error", "message": "زیرنویسی یافت نشد. لطفاً فایل SRT جداگانه آپلود کنید یا ویدیویی دارای زیرنویس داخلی انتخاب کنید."}), 400
+
+
+
 
         def run_background_process():
             try:
@@ -146,7 +246,7 @@ def process_srt():
                 try:
                     subs = pysrt.from_string(srt_data)
                 except Exception:
-                    socketio.emit('status_update', {'msg': '❌ فرمت فایل نامعتبر است.'})
+                    socketio.emit('status_update', {'msg': '❌ فرمت زیرنویس نامعتبر است.'})
                     return
 
                 raw_sub_data = []
@@ -160,23 +260,32 @@ def process_srt():
 
                 total_subs = len(raw_sub_data)
                 if total_subs == 0:
-                    socketio.emit('status_update', {'msg': '❌ محتوای متنی یافت نشد.'})
+                    socketio.emit('status_update', {'msg': '❌ محتوای متنی در زیرنویس یافت نشد.'})
                     return
 
-                for idx, (i, orig_text, start_ms, end_ms) in enumerate(raw_sub_data):
-                    progress = min(100, int(((idx + 1) / total_subs) * 100))
-                    socketio.emit('status_update', {'msg': f'در حال پردازش ({progress}%)...'})
+                batch_size = 10
+                
+                for b_start in range(0, total_subs, batch_size):
+                    batch_items = raw_sub_data[b_start:b_start + batch_size]
+                    progress = min(100, int(((b_start + len(batch_items)) / total_subs) * 100))
+                    socketio.emit('status_update', {'msg': f'در حال پردازش دسته‌ای ({progress}%)...'})
 
-                    d_text = safe_single_translate(orig_text, text_lang)
-                    a_text = d_text if audio_lang == text_lang else safe_single_translate(orig_text, audio_lang)
+                    # تعریف یک تابع کمکی برای انجام هم‌زمان ترجمه و پردازش صوت یک خط
+                    def process_single_item(item):
+                        i, orig_text, start_ms, end_ms = item
+                        # ترجمه هم‌زمان در ترید مجزا
+                        d_text = safe_single_translate(orig_text, text_lang)
+                        a_text = d_text if audio_lang == text_lang else safe_single_translate(orig_text, audio_lang)
 
-                    sub_info = (i, d_text, a_text, start_ms, end_ms)
-                    process_single_sub(sub_info, gender, audio_lang)
-                    
-                    time.sleep(0.02)  # وقفه کوتاه جهت جلوگیری از مسدودی API
+                        sub_info = (i, d_text, a_text, start_ms, end_ms)
+                        process_single_sub(sub_info, gender, audio_lang)
+
+                    # اجرای کل دسته (ترجمه + صوت) به صورت کاملاً موازی و بدون معطلی
+                    with ThreadPoolExecutor(max_workers=5) as executor:
+                        executor.map(process_single_item, batch_items)
 
                 socketio.emit('processing_finished', {})
-                print("[✔] پردازش با موفقیت به پایان رسید.")
+                print("[✔] پردازش دسته‌ای موازی با موفقیت به پایان رسید.")
 
             except Exception as bg_err:
                 traceback.print_exc()
@@ -188,16 +297,13 @@ def process_srt():
     except Exception as e:
         print(f"[!] خطای مسیر process: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
 if __name__ == '__main__':
     url = 'http://127.0.0.1:5000'
     print(f"\n[+] سرور اجرا شد. در حال باز کردن برنامه روی: {url}\n")
 
-    # بررسی اجرای برنامه در ویندوز/دسکتاپ یا Termux
     use_native_gui = False
     if HAS_WEBVIEW:
         try:
-            # بررسی اولیه جهت حصول اطمینان از امکان ساخت پنجره
             webview.create_window(
                 title='مترجم و دوبلور هوشمند زیرنویس',
                 url=url,
@@ -210,7 +316,6 @@ if __name__ == '__main__':
             use_native_gui = False
 
     if use_native_gui:
-        # اگر سیستم‌عامل دسکتاپ باشد و pywebview کار کند
         server_thread = threading.Thread(
             target=lambda: socketio.run(app, host='127.0.0.1', port=5000, debug=False, use_reloader=False),
             daemon=True
@@ -218,6 +323,5 @@ if __name__ == '__main__':
         server_thread.start()
         webview.start()
     else:
-        # اگر محیط Termux باشد، مرورگر گوشی را باز می‌کند
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
         socketio.run(app, host='127.0.0.1', port=5000, debug=False, use_reloader=False)

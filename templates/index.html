@@ -257,6 +257,8 @@
         
         <div class="video-wrapper" id="videoContainer">
             <div id="fsControls" class="fs-controls-overlay">
+                <button class="fs-btn" onclick="adjustSync(-500, event)">⏪ سینک -0.5s</button>
+                <button class="fs-btn" onclick="adjustSync(500, event)">⏩ سینک +0.5s</button>
                 <button id="lockBtn" class="fs-btn fs-btn-lock" onclick="toggleScreenLock(event)">🔓 قفل لمس</button>
                 <button id="exitFsBtn" class="fs-btn" onclick="exitFullscreenHandler(event)">✖ خروج از تمام‌صفحه</button>
             </div>
