@@ -485,7 +485,7 @@
             appendLog("پایان کل پردازش.");
             processBtn.disabled = false;
         });
-
+        let subtitleDelayMs = 1000;
         video.ontimeupdate = function() {
             const currentTimeMs = (video.currentTime * 1000) - syncOffsetMs;
             let currentSubFound = false;
@@ -496,48 +496,28 @@
                 
                 if (item.start_ms > currentTimeMs + 1000) break;
 
-                if (currentTimeMs >= item.start_ms && currentTimeMs <= (item.end_ms + 300)) {
+                // 🟢 اعمال تأخیر ۱ ثانیه‌ای برای نمایش زیرنویس (اول صدا پخش می‌شود، بعد متن می‌آید)
+                const delayedStartTime = item.start_ms + subtitleDelayMs;
+
+                if (currentTimeMs >= delayedStartTime && currentTimeMs <= (item.end_ms + 300)) {
                     if (item.display_text) {
                         subOverlay.innerText = item.display_text;
                         subOverlay.style.display = "block";
                     }
                     currentSubFound = true;
+                }
 
+                // بخش مربوط به پخش صوت (بدون تغییر و سر وقت خودش پخش می‌شود)
+                if (currentTimeMs >= item.start_ms && currentTimeMs <= (item.end_ms + 300)) {
                     if (!item.played) {
                         item.played = true;
                         if (item.audio_url) {
                             audioPlayer.src = item.audio_url;
                             audioPlayer.currentTime = 0;
                             audioPlayer.volume = parseFloat(dubVolSlider.value);
-                            
-                            audioPlayer.onloadedmetadata = function() {
-                                let targetRate = video.playbackRate;
-
-                                let nextItem = null;
-                                for (let j = i + 1; j < keys.length; j++) {
-                                    if (dubbingMap[keys[j]] && dubbingMap[keys[j]].audio_url) {
-                                        nextItem = dubbingMap[keys[j]];
-                                        break;
-                                    }
-                                }
-
-                                if (nextItem) {
-                                    let timeUntilNextMs = (nextItem.start_ms - item.start_ms);
-                                    let availableTimeSec = (timeUntilNextMs / 1000) / video.playbackRate;
-                                    let audioDuration = audioPlayer.duration;
-
-                                    if (audioDuration > availableTimeSec && availableTimeSec > 0.5) {
-                                        targetRate = (audioDuration / availableTimeSec) * video.playbackRate;
-                                        targetRate = Math.min(targetRate, 2.5);
-                                    }
-                                }
-
-                                audioPlayer.playbackRate = targetRate;
-                                audioPlayer.play().catch(() => {});
-                            };
+                            audioPlayer.play().catch(() => {});
                         }
                     }
-                    break;
                 }
             }
 
@@ -545,7 +525,6 @@
                 subOverlay.style.display = "none";
             }
         };
-
         video.onseeking = function() {
             audioPlayer.pause();
             subOverlay.style.display = "none";
