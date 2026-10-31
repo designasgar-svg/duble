@@ -172,7 +172,7 @@
         <div class="form-group">
                 <div>
                     <label>۱. انتخاب فایل ویدیو (بررسی خودکار زیرنویس چسبیده):</label>
-                    <input type="file" id="videoFile" accept="video/*" onchange="loadVideoAndCheckSub(event)">
+                    <input type="file" id="videoFile" onchange="loadVideoAndCheckSub(event)">
                 </div>
                 <div>
                     <label>۲. انتخاب فایل زیرنویس جداگانه (.srt) - [اختیاری]:</label>
@@ -558,11 +558,16 @@
             const file = event.target.files[0];
             if (!file) return;
 
+            // خواندن نام واقعی فایل (روی کامپیوتر و تبلت)
+            const fileName = file.name || "فایل ناشناس";
+
             // بارگذاری ویدیو در پلیر جهت نمایش
             video.src = URL.createObjectURL(file);
             video.volume = parseFloat(videoVolSlider.value);
-            statusDiv.innerText = "ویدیو بارگذاری شد. در حال بررسی زیرنویس داخلی...";
-            appendLog("📁 ویدیو انتخاب شد: " + file.name);
+            
+            // نمایش نام واقعی فایل به کاربر
+            statusDiv.innerText = `فایل "${fileName}" بارگذاری شد. در حال بررسی زیرنویس داخلی...`;
+            appendLog("📁 ویدیو انتخاب شد: " + fileName);
 
             // ارسال ویدیو به سرور برای چک کردن زیرنویس چسبیده/جاسازی‌شده
             const formData = new FormData();
@@ -575,16 +580,15 @@
                 });
                 let result = await response.json();
                 
-                statusDiv.innerText = result.message;
+                statusDiv.innerText = `فایل "${fileName}" - ${result.message}`;
                 appendLog(result.message);
 
-             if (result.has_sub) {
-                    // اگر زیرنویس داشت، می‌توانیم به کاربر اعلام کنیم آماده پردازش است
-                    showToast(result.message); // <-- اصلاح به result
+                if (result.has_sub) {
+                    showToast(`فایل ${fileName}: ` + result.message);
                 }
             } catch (err) {
                 appendLog("⚠️ امکان بررسی خودکار زیرنویس ویدیو وجود ندارد: " + err);
-                statusDiv.innerText = "ویدیو بارگذاری شد. (زیرنویس بررسی نشد)";
+                statusDiv.innerText = `فایل "${fileName}" بارگذاری شد. (زیرنویس بررسی نشد)`;
             }
         }
         async function startProcessing() {
