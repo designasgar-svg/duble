@@ -245,33 +245,48 @@ def process_srt():
                         pass
 
                 try:
-                    # استفاده از pysubs2 برای پشتیبانی از فرمت‌های ASS, SSA, SRT و غیره
-                    # پارامتر سه‌گانه encoding برای جلوگیری از خطای کاراکترهای فارسی/خاص است
-                    subs = pysubs2.load_from_string(srt_data)
-                except Exception:
+                    # روش استاندارد و کاملاً مطمئن برای بارگذاری انواع فرمت‌ها از جمله ASS و SRT
+                    # اگر داده‌ها رشته‌ای هستند، آن‌ها را به صورت فایل موقت با پسوند مناسب ذخیره می‌کنیم
+                    import tempfile
+                    
+                    # تشخیص اینکه آیا زیرنویس ASS است یا SRT
+                    is_ass = "[Script Info]" in srt_data or "Dialogue:" in srt_data or "Events" in srt_data
+                    suffix = ".ass" if is_ass else ".srt"
+                    
+                    temp_sub_fd, temp_sub_path = tempfile.mkstemp(suffix=suffix)
+                    os.close(temp_sub_fd)
+                    
+                    with open(temp_sub_path, 'w', encoding='utf-8', errors='ignore') as f_sub:
+                        f_sub.write(srt_data)
+                        
+                    # بارگذاری با pysubs2
+                    subs = pysubs2.load(temp_sub_path)
+                    
+                    # پاکسازی فایل موقت
                     try:
-                        # اگر به صورت استریم متنی مستقیم نشد، اجازه دهید مسیر فایل یا حالت پیش‌فرض تست شود
-                        subs = pysubs2.from_string(srt_data)
-                    except Exception as err:
-                        print(f"[!] خطای پردازش زیرنویس: {err}")
-                        socketio.emit('status_update', {'msg': '❌ فرمت زیرنویس نامعتبر است یا پشتیبانی نمی‌شود.'})
-                        return
+                        os.remove(temp_sub_path)
+                    except:
+                        pass
+                        
+                except Exception as err:
+                    print(f"[!] خطای پردازش زیرنویس با pysubs2: {err}")
+                    socketio.emit('status_update', {'msg': '❌ فرمت زیرنویس نامعتبر است یا پشتیبانی نمی‌شود.'})
+                    return
 
                 raw_sub_data = []
                 for i, sub in enumerate(subs):
-                    # پاکسازی تگ‌های استایل‌بندی مخصوص ASS (مانند {\an8} یا تگ‌های رنگ و فونت)
                     text = sub.text
-                    # حذف تگ‌های متداول درون کروشه یا آکولاد در ASS
                     import re
-                    text = re.sub(r'\{[^}]*\}', '', text) # حذف تگ‌های مثل {\pos(...)} یا {\b1}
-                    text = text.replace('\\N', ' ').strip() # تبدیل لاین‌بریگ‌های ASS به فاصله
+                    # پاکسازی کامل تگ‌های استایل‌بندی، رنگ، فونت و موقعیت‌یابی درون آکولاد در فایل‌های ASS
+                    text = re.sub(r'\{[^}]*\}', '', text)
+                    text = text.replace('\\N', ' ').replace('\\n', ' ').strip()
                     
                     if not text:
                         continue
                     
-                    # در pysubs2 زمان‌ها برحسب میلی‌ثانیه ذخیره می‌شوند یا قابل تبدیلند (sub.start و sub.end بر حسب میلی‌ثانیه یا شیء زمانیند)
-                    start_ms = sub.start
-                    end_ms = sub.end
+                    # تبدیل زمان‌ها به میلی‌ثانیه به صورت امن
+                    start_ms = int(sub.start)
+                    end_ms = int(sub.end)
                     raw_sub_data.append((i, text, start_ms, end_ms))
 
                 total_subs = len(raw_sub_data)
