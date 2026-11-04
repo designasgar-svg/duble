@@ -40,7 +40,6 @@
         .video-wrapper { position: relative; width: 100%; margin-top: 15px; background: #000; border-radius: 8px; overflow: hidden; transition: all 0.3s ease; }
         video { width: 100%; max-height: 440px; display: block; }
 
-        /* دکمه‌های شناور کنترل تمام صفحه */
         .fs-controls-overlay {
             position: absolute;
             top: 15px;
@@ -99,7 +98,6 @@
             z-index: 2147483646;
         }
 
-        /* استایل تمام‌صفحه کانتینر شامل ویدیو و زیرنویس */
         .video-wrapper:fullscreen {
             width: 100vw !important;
             height: 100vh !important;
@@ -175,7 +173,6 @@
                     <input type="file" id="videoFile" onchange="loadVideoAndCheckSub(event)">
                 </div>
                 <div>
-                    <!-- به‌روزرسانی بخش accept برای پشتیبانی از فرمت‌های ASS و SSA علاوه بر SRT -->
                     <label>۲. انتخاب فایل زیرنویس جداگانه (.srt, .ass, .ssa) - [اختیاری]:</label>
                     <input type="file" id="srtFile" accept=".srt,.ass,.ssa">
                 </div>
@@ -491,4 +488,154 @@
                 if (currentTimeMs >= delayedStartTime && currentTimeMs <= (item.end_ms + 300)) {
                     if (item.display_text) {
                         subOverlay.innerText = item.display_text;
-                        subOverlay.style.display =
+                        subOverlay.style.display = "block";
+                    }
+                    currentSubFound = true;
+                }
+
+                if (currentTimeMs >= item.start_ms && currentTimeMs <= (item.end_ms + 300)) {
+                    if (!item.played) {
+                        item.played = true;
+                        if (item.audio_url) {
+                            audioPlayer.src = item.audio_url;
+                            audioPlayer.currentTime = 0;
+                            audioPlayer.volume = parseFloat(dubVolSlider.value);
+                            audioPlayer.play().catch(() => {});
+                        }
+                    }
+                }
+            }
+
+            if (!currentSubFound) {
+                subOverlay.style.display = "none";
+            }
+        };
+
+        video.onseeking = function() {
+            audioPlayer.pause();
+            subOverlay.style.display = "none";
+            const currentTimeMs = (video.currentTime * 1000) - syncOffsetMs;
+            for (let id in dubbingMap) {
+                dubbingMap[id].played = dubbingMap[id].end_ms < currentTimeMs;
+            }
+        };
+
+        async function loadVideoAndCheckSub(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const fileName = file.name || "فایل ناشناس";
+
+            video.src = URL.createObjectURL(file);
+            video.volume = parseFloat(videoVolSlider.value);
+            
+            statusDiv.innerText = `فایل "${fileName}" بارگذاری شد. در حال بررسی زیرنویس داخلی...`;
+            appendLog("📁 ویدیو انتخاب شد: " + fileName);
+
+            const formData = new FormData();
+            formData.append('videoFile', file);
+
+            try {
+                let response = await fetch('/check_video_sub', {
+                    method: 'POST',
+                    body: formData
+                });
+                let result = await response.json();
+                
+                statusDiv.innerText = `فایل "${fileName}" - ${result.message}`;
+                appendLog(result.message);
+
+                if (result.has_sub) {
+                    showToast(`فایل ${fileName}: ` + result.message);
+                }
+            } catch (err) {
+                appendLog("⚠️ امکان بررسی خودکار زیرنویس ویدیو وجود ندارد: " + err);
+                statusDiv.innerText = `فایل "${fileName}" بارگذاری شد. (زیرنویس بررسی نشد)`;
+            }
+        }
+
+        async function startProcessing() {
+            const videoInput = document.getElementById('videoFile');
+            const srtInput = document.getElementById('srtFile');
+            const voiceGender = document.getElementById('voiceGender').value;
+            const textLang = document.getElementById('textLang').value;
+            const audioLang = document.getElementById('audioLang').value;
+
+            if (!videoInput.files[0] && !srtInput.files[0]) {
+                alert("لطفاً حداقل فایل ویدیو یا فایل زیرنویس را انتخاب کنید.");
+                return;
+            }
+
+            processBtn.disabled = true;
+            logDiv.innerHTML = "";
+            dubbingMap = {};
+
+            statusDiv.innerText = "⏳ در حال آنالیز، استخراج و ترجمه...";
+
+            const formData = new FormData();
+            formData.append('gender', voiceGender);
+            formData.append('text_lang', textLang);
+            formData.append('audio_lang', audioLang);
+
+            if (srtInput.files[0]) {
+                const srtText = await srtInput.files[0].text();
+                formData.append('srt_data', srtText);
+            } else if (videoInput.files[0]) {
+                formData.append('video_file_obj', videoInput.files[0]);
+            }
+
+            fetch('/process', { method: 'POST', body: formData });
+        }
+
+        function startFastForward() {
+            if (isScreenLocked) return;
+            holdTimer = setTimeout(() => {
+                isHolding = true;
+                video.playbackRate = 2.0;
+                audioPlayer.playbackRate = 2.0;
+                appendLog("⏩ پخش با سرعت ۲ برابر");
+            }, 200);
+        }
+
+        function stopFastForward() {
+            if (isScreenLocked) return;
+            clearTimeout(holdTimer);
+            if (isHolding) {
+                isHolding = false;
+                video.playbackRate = 1.0;
+                audioPlayer.playbackRate = 1.0;
+                appendLog("▶️ بازگشت به سرعت معمولی");
+            }
+        }
+
+        video.addEventListener('mousedown', (e) => { if (e.button === 0) startFastForward(); });
+        video.addEventListener('mouseup', stopFastForward);
+        video.addEventListener('mouseleave', stopFastForward);
+        video.addEventListener('touchstart', startFastForward);
+        video.addEventListener('touchend', stopFastForward);
+
+        video.addEventListener('click', (e) => {
+            if (isScreenLocked) return;
+            if (isHolding) return;
+
+            const currentTime = new Date().getTime();
+            const tapInterval = currentTime - lastTapTime;
+
+            if (tapInterval < 300 && tapInterval > 0) {
+                const rect = video.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const videoWidth = rect.width;
+
+                if (clickX > videoWidth / 2) {
+                    video.currentTime = Math.min(video.duration, video.currentTime + 5);
+                    appendLog("⏩ ۵ ثانیه به جلو");
+                } else {
+                    video.currentTime = Math.max(0, video.currentTime - 5);
+                    appendLog("⏪ ۵ ثانیه به عقب");
+                }
+            }
+            lastTapTime = currentTime;
+        });
+    </script>
+</body>
+</html>
