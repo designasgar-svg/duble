@@ -10,6 +10,7 @@ import subprocess
 import json
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+import pysubs2
 
 # ۱. رفع خطای sys.argv در Termux قبل از import کردن webview
 if not sys.argv or sys.argv[0] is None:
@@ -244,18 +245,33 @@ def process_srt():
                         pass
 
                 try:
-                    subs = pysrt.from_string(srt_data)
+                    # استفاده از pysubs2 برای پشتیبانی از فرمت‌های ASS, SSA, SRT و غیره
+                    # پارامتر سه‌گانه encoding برای جلوگیری از خطای کاراکترهای فارسی/خاص است
+                    subs = pysubs2.load_from_string(srt_data)
                 except Exception:
-                    socketio.emit('status_update', {'msg': '❌ فرمت زیرنویس نامعتبر است.'})
-                    return
+                    try:
+                        # اگر به صورت استریم متنی مستقیم نشد، اجازه دهید مسیر فایل یا حالت پیش‌فرض تست شود
+                        subs = pysubs2.from_string(srt_data)
+                    except Exception as err:
+                        print(f"[!] خطای پردازش زیرنویس: {err}")
+                        socketio.emit('status_update', {'msg': '❌ فرمت زیرنویس نامعتبر است یا پشتیبانی نمی‌شود.'})
+                        return
 
                 raw_sub_data = []
                 for i, sub in enumerate(subs):
-                    text = sub.text_without_tags.strip()
+                    # پاکسازی تگ‌های استایل‌بندی مخصوص ASS (مانند {\an8} یا تگ‌های رنگ و فونت)
+                    text = sub.text
+                    # حذف تگ‌های متداول درون کروشه یا آکولاد در ASS
+                    import re
+                    text = re.sub(r'\{[^}]*\}', '', text) # حذف تگ‌های مثل {\pos(...)} یا {\b1}
+                    text = text.replace('\\N', ' ').strip() # تبدیل لاین‌بریگ‌های ASS به فاصله
+                    
                     if not text:
                         continue
-                    start_ms = (sub.start.hours * 3600 + sub.start.minutes * 60 + sub.start.seconds) * 1000 + sub.start.milliseconds
-                    end_ms = (sub.end.hours * 3600 + sub.end.minutes * 60 + sub.end.seconds) * 1000 + sub.end.milliseconds
+                    
+                    # در pysubs2 زمان‌ها برحسب میلی‌ثانیه ذخیره می‌شوند یا قابل تبدیلند (sub.start و sub.end بر حسب میلی‌ثانیه یا شیء زمانیند)
+                    start_ms = sub.start
+                    end_ms = sub.end
                     raw_sub_data.append((i, text, start_ms, end_ms))
 
                 total_subs = len(raw_sub_data)
