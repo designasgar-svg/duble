@@ -290,12 +290,15 @@
         const dubVolVal = document.getElementById('dubVolVal');
         const syncStatus = document.getElementById('syncStatus');
 
-        const MAX_DUB_RATE = 1.75; // حداکثر سرعت مجاز برای خواندن سریع جمله بدون افت شدید کیفیت
-        
+        // محدوده ایمن سرعت دوبله: آرام‌تر در فرصت زیاد، تندتر تا سقف مجاز در فرصت کم
+        const MIN_DUB_RATE = 0.85;
+        const MAX_DUB_RATE = 1.65;
+
         let dubbingMap = {};
         let syncOffsetMs = 0;
         let currentSentenceRate = 1.0;
         let activeAudioToken = 0;
+        const activeExtraAudios = new Set();
 
         let holdTimer = null;
         let isHolding = false;
@@ -305,6 +308,17 @@
 
         video.volume = parseFloat(videoVolSlider.value);
         audioPlayer.volume = parseFloat(dubVolSlider.value);
+
+        function stopAllExtraAudios() {
+            activeExtraAudios.forEach(a => {
+                a.onloadedmetadata = null;
+                a.onended = null;
+                a.onerror = null;
+                a.pause();
+                a.src = "";
+            });
+            activeExtraAudios.clear();
+        }
 
         function showToast(message, duration = 4000) {
             let container = document.getElementById('toast-container');
@@ -435,8 +449,10 @@
         });
 
         dubVolSlider.addEventListener('input', function() {
-            audioPlayer.volume = parseFloat(this.value);
-            dubVolVal.innerText = Math.round(audioPlayer.volume * 100) + '%';
+            const vol = parseFloat(this.value);
+            audioPlayer.volume = vol;
+            activeExtraAudios.forEach(a => { a.volume = vol; });
+            dubVolVal.innerText = Math.round(vol * 100) + '%';
         });
 
         function adjustSync(deltaMs) {
@@ -448,6 +464,7 @@
             activeAudioToken++;
             audioPlayer.onloadedmetadata = null;
             audioPlayer.pause();
+            stopAllExtraAudios();
             currentSentenceRate = 1.0;
 
             const currentTimeMs = (video.currentTime * 1000) - syncOffsetMs;
@@ -490,7 +507,6 @@
                 return 1.0;
             }
 
-            // فرصتِ واقعی: پایان زیرنویس فعلی یا شروع زیرنویس بعدی (هرکدام زودتر برسد)
             let deadlineMs = item.end_ms;
             if (nextItem && nextItem.start_ms < deadlineMs) {
                 deadlineMs = nextItem.start_ms;
@@ -501,16 +517,47 @@
                 return MAX_DUB_RATE;
             }
 
-            const neededRate = durationSec / (availableMs / 1000);
-            if (neededRate <= 1.02) {
-                return 1.0;
+            const availableSec = availableMs / 1000;
+            const neededRate = durationSec / availableSec;
+
+            // فرصت کم است: تا سقف MAX_DUB_RATE تندتر بخوان
+            if (neededRate > 1.02) {
+                return Math.min(neededRate, MAX_DUB_RATE);
             }
 
-            return Math.min(neededRate, MAX_DUB_RATE);
+            // فرصت نسبتاً زیاد است: تا حداقل MIN_DUB_RATE آرام‌تر بخوان
+            if (availableSec >= durationSec * 1.3) {
+                return Math.max(neededRate, MIN_DUB_RATE);
+            }
+
+            return 1.0;
         }
 
         function playDubItem(item, nextItem) {
             if (!item || !item.audio_url) return;
+
+            const isPrevStillPlaying = !audioPlayer.paused && !audioPlayer.ended && audioPlayer.currentTime > 0;
+
+            // اگر جمله قبلی هنوز در حال پخش است، جمله جدید را با یک Audio مستقل پخش کن تا قبلی قطع نشود
+            if (isPrevStillPlaying) {
+                const extraAudio = new Audio(item.audio_url);
+                extraAudio.volume = parseFloat(dubVolSlider.value);
+                activeExtraAudios.add(extraAudio);
+
+                const cleanup = () => {
+                    activeExtraAudios.delete(extraAudio);
+                };
+                extraAudio.onended = cleanup;
+                extraAudio.onerror = cleanup;
+
+                extraAudio.onloadedmetadata = () => {
+                    const tNow = (video.currentTime * 1000) - syncOffsetMs;
+                    const rate = calculateSentenceRate(item, nextItem, tNow, extraAudio.duration);
+                    extraAudio.playbackRate = isHolding ? 2.0 : rate;
+                    extraAudio.play().catch(cleanup);
+                };
+                return;
+            }
 
             const token = ++activeAudioToken;
             audioPlayer.pause();
@@ -521,8 +568,8 @@
 
             const startWithComputedRate = () => {
                 if (token !== activeAudioToken) return;
-                const nowMs = (video.currentTime * 1000) - syncOffsetMs;
-                const computedRate = calculateSentenceRate(item, nextItem, nowMs, audioPlayer.duration);
+                const tNow = (video.currentTime * 1000) - syncOffsetMs;
+                const computedRate = calculateSentenceRate(item, nextItem, tNow, audioPlayer.duration);
                 currentSentenceRate = computedRate;
                 audioPlayer.playbackRate = isHolding ? 2.0 : currentSentenceRate;
                 audioPlayer.play().catch(() => {});
@@ -576,6 +623,7 @@
             activeAudioToken++;
             audioPlayer.onloadedmetadata = null;
             audioPlayer.pause();
+            stopAllExtraAudios();
             currentSentenceRate = 1.0;
             subOverlay.style.display = "none";
             const currentTimeMs = (video.currentTime * 1000) - syncOffsetMs;
@@ -634,6 +682,7 @@
             logDiv.innerHTML = "";
             dubbingMap = {};
             currentSentenceRate = 1.0;
+            stopAllExtraAudios();
 
             statusDiv.innerText = "⏳ در حال آنالیز، استخراج و ترجمه...";
 
@@ -658,6 +707,7 @@
                 isHolding = true;
                 video.playbackRate = 2.0;
                 audioPlayer.playbackRate = 2.0;
+                activeExtraAudios.forEach(a => { a.playbackRate = 2.0; });
                 appendLog("⏩ پخش با سرعت ۲ برابر");
             }, 200);
         }
@@ -669,6 +719,7 @@
                 isHolding = false;
                 video.playbackRate = 1.0;
                 audioPlayer.playbackRate = currentSentenceRate;
+                activeExtraAudios.forEach(a => { a.playbackRate = currentSentenceRate; });
                 appendLog("▶️ بازگشت به سرعت معمولی");
             }
         }
