@@ -289,9 +289,13 @@
         const dubVolSlider = document.getElementById('dubVolSlider');
         const dubVolVal = document.getElementById('dubVolVal');
         const syncStatus = document.getElementById('syncStatus');
+
+        const MAX_DUB_RATE = 1.75; // حداکثر سرعت مجاز برای خواندن سریع جمله بدون افت شدید کیفیت
         
         let dubbingMap = {};
         let syncOffsetMs = 0;
+        let currentSentenceRate = 1.0;
+        let activeAudioToken = 0;
 
         let holdTimer = null;
         let isHolding = false;
@@ -440,7 +444,12 @@
             const seconds = (syncOffsetMs / 1000).toFixed(1);
             syncStatus.innerText = `میزان جابه‌جایی فعلی: ${seconds > 0 ? '+' + seconds : seconds} ثانیه (${syncOffsetMs}ms)`;
             appendLog(`⏱️ سینک آپدیت شد: ${seconds} ثانیه`);
-            
+
+            activeAudioToken++;
+            audioPlayer.onloadedmetadata = null;
+            audioPlayer.pause();
+            currentSentenceRate = 1.0;
+
             const currentTimeMs = (video.currentTime * 1000) - syncOffsetMs;
             for (let id in dubbingMap) {
                 let item = dubbingMap[id];
@@ -472,15 +481,74 @@
             processBtn.disabled = false;
         });
 
+        function getSortedDubItems() {
+            return Object.values(dubbingMap).sort((a, b) => a.start_ms - b.start_ms);
+        }
+
+        function calculateSentenceRate(item, nextItem, nowMs, durationSec) {
+            if (!durationSec || !isFinite(durationSec) || durationSec <= 0) {
+                return 1.0;
+            }
+
+            // فرصتِ واقعی: پایان زیرنویس فعلی یا شروع زیرنویس بعدی (هرکدام زودتر برسد)
+            let deadlineMs = item.end_ms;
+            if (nextItem && nextItem.start_ms < deadlineMs) {
+                deadlineMs = nextItem.start_ms;
+            }
+
+            const availableMs = deadlineMs - nowMs;
+            if (availableMs <= 50) {
+                return MAX_DUB_RATE;
+            }
+
+            const neededRate = durationSec / (availableMs / 1000);
+            if (neededRate <= 1.02) {
+                return 1.0;
+            }
+
+            return Math.min(neededRate, MAX_DUB_RATE);
+        }
+
+        function playDubItem(item, nextItem) {
+            if (!item || !item.audio_url) return;
+
+            const token = ++activeAudioToken;
+            audioPlayer.pause();
+            audioPlayer.onloadedmetadata = null;
+            audioPlayer.src = item.audio_url;
+            audioPlayer.currentTime = 0;
+            audioPlayer.volume = parseFloat(dubVolSlider.value);
+
+            const startWithComputedRate = () => {
+                if (token !== activeAudioToken) return;
+                const nowMs = (video.currentTime * 1000) - syncOffsetMs;
+                const computedRate = calculateSentenceRate(item, nextItem, nowMs, audioPlayer.duration);
+                currentSentenceRate = computedRate;
+                audioPlayer.playbackRate = isHolding ? 2.0 : currentSentenceRate;
+                audioPlayer.play().catch(() => {});
+            };
+
+            if (audioPlayer.readyState >= 1 && isFinite(audioPlayer.duration) && audioPlayer.duration > 0) {
+                startWithComputedRate();
+            } else {
+                audioPlayer.onloadedmetadata = () => {
+                    audioPlayer.onloadedmetadata = null;
+                    startWithComputedRate();
+                };
+                audioPlayer.load();
+            }
+        }
+
         let subtitleDelayMs = 1000;
         video.ontimeupdate = function() {
             const currentTimeMs = (video.currentTime * 1000) - syncOffsetMs;
             let currentSubFound = false;
 
-            const keys = Object.keys(dubbingMap);
-            for (let i = 0; i < keys.length; i++) {
-                let item = dubbingMap[keys[i]];
-                
+            const sortedItems = getSortedDubItems();
+            for (let i = 0; i < sortedItems.length; i++) {
+                const item = sortedItems[i];
+                const nextItem = sortedItems[i + 1] || null;
+
                 if (item.start_ms > currentTimeMs + 1000) break;
 
                 const delayedStartTime = item.start_ms + subtitleDelayMs;
@@ -493,16 +561,9 @@
                     currentSubFound = true;
                 }
 
-                if (currentTimeMs >= item.start_ms && currentTimeMs <= (item.end_ms + 300)) {
-                    if (!item.played) {
-                        item.played = true;
-                        if (item.audio_url) {
-                            audioPlayer.src = item.audio_url;
-                            audioPlayer.currentTime = 0;
-                            audioPlayer.volume = parseFloat(dubVolSlider.value);
-                            audioPlayer.play().catch(() => {});
-                        }
-                    }
+                if (currentTimeMs >= item.start_ms && !item.played) {
+                    item.played = true;
+                    playDubItem(item, nextItem);
                 }
             }
 
@@ -512,7 +573,10 @@
         };
 
         video.onseeking = function() {
+            activeAudioToken++;
+            audioPlayer.onloadedmetadata = null;
             audioPlayer.pause();
+            currentSentenceRate = 1.0;
             subOverlay.style.display = "none";
             const currentTimeMs = (video.currentTime * 1000) - syncOffsetMs;
             for (let id in dubbingMap) {
@@ -569,6 +633,7 @@
             processBtn.disabled = true;
             logDiv.innerHTML = "";
             dubbingMap = {};
+            currentSentenceRate = 1.0;
 
             statusDiv.innerText = "⏳ در حال آنالیز، استخراج و ترجمه...";
 
@@ -603,7 +668,7 @@
             if (isHolding) {
                 isHolding = false;
                 video.playbackRate = 1.0;
-                audioPlayer.playbackRate = 1.0;
+                audioPlayer.playbackRate = currentSentenceRate;
                 appendLog("▶️ بازگشت به سرعت معمولی");
             }
         }
